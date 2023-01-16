@@ -17,6 +17,7 @@ Additionally, this source code will be developed in and for a Linux system. Ther
 Fullscale's flight computer will be compiled using Cargo. This means that all that needs to be done to run it is:
 
 `cargo build`
+
 `cargo run `
 
 ## IDE Setup (VSCode)
