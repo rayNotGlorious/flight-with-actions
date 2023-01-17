@@ -23,7 +23,7 @@ Use this command to actually compile to the correct architecture:
 
 `cross build --target armv7-unknown-linux-gnueabihf`
 
-The output binary will be placed into ./target/armv7-unknown-linux-gnueabihf/fc. Run this.
+The output binary will be placed into ./target/armv7-unknown-linux-gnueabihf/debug/fs-flight-computer. Run this.
 
 ## IDE Setup (VSCode)
 ---
