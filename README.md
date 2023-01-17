@@ -18,6 +18,7 @@ Fullscale's flight computer will be cross-compiled. This means that the product 
 
 `cargo install -f cross`
 
+This tool additionally relies on [Docker](https://docs.docker.com/engine/install/ubuntu/) being installed.
 Use this command to actually compile to the correct architecture:
 
 `cross build --target armv7-unknown-linux-gnueabihf`
