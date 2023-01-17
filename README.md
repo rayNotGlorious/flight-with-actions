@@ -14,11 +14,15 @@ Additionally, this source code will be developed in and for a Linux system. Ther
 
 ## Running
 ---
-Fullscale's flight computer will be compiled using Cargo. This means that all that needs to be done to run it is:
+Fullscale's flight computer will be cross-compiled. This means that the product will be compiled on development computers and the binary will subsequently be transfered to the flight computer. So, a tool called Cross should be used when compiling the software:
 
-`cargo build`
+`cargo install -f cross`
 
-`cargo run `
+Use this command to actually compile to the correct architecture:
+
+`cross build --target armv7-unknown-linux-gnueabihf`
+
+The output binary will be placed into ./target/armv7-unknown-linux-gnueabihf/fc. Run this.
 
 ## IDE Setup (VSCode)
 ---
