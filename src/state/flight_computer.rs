@@ -105,7 +105,7 @@ mod tests {
         };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_b = FlightComputer::<StateB>::from(in_state_a);
+        let in_state_b: FlightComputer<StateB> = in_state_a.into();
 
         assert_eq!(
             expected_shared_value_between_states,
@@ -124,7 +124,7 @@ mod tests {
         };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_c = FlightComputer::<StateC>::from(in_state_a);
+        let in_state_c: FlightComputer<StateC> = in_state_a.into();
 
         assert_eq!(
             expected_shared_value_between_states,
@@ -143,8 +143,8 @@ mod tests {
         };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_b = FlightComputer::<StateB>::from(in_state_a);
-        let in_state_d = FlightComputer::<StateD>::from(in_state_b);
+        let in_state_b: FlightComputer<StateB> = in_state_a.into();
+        let in_state_d: FlightComputer<StateD> = in_state_b.into();
 
         assert_eq!(
             expected_shared_value_between_states,
@@ -163,8 +163,8 @@ mod tests {
         };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_c = FlightComputer::<StateC>::from(in_state_a);
-        let in_state_d = FlightComputer::<StateD>::from(in_state_c);
+        let in_state_c: FlightComputer<StateC> = in_state_a.into();
+        let in_state_d: FlightComputer<StateD> = in_state_c.into();
 
         assert_eq!(
             expected_shared_value_between_states,
@@ -183,8 +183,8 @@ mod tests {
         };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_c = FlightComputer::<StateC>::from(in_state_a);
-        let in_state_a = FlightComputer::<StateA>::from(in_state_c);
+        let in_state_c: FlightComputer<StateC> = in_state_a.into();
+        let in_state_a: FlightComputer<StateA> = in_state_c.into();
 
         assert_eq!(
             expected_shared_value_between_states,
@@ -203,9 +203,9 @@ mod tests {
         };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_c = FlightComputer::<StateC>::from(in_state_a);
-        let in_state_d = FlightComputer::<StateD>::from(in_state_c);
-        let in_state_a = FlightComputer::<StateA>::from(in_state_d);
+        let in_state_c: FlightComputer<StateC> = in_state_a.into();
+        let in_state_d: FlightComputer<StateD> = in_state_c.into();
+        let in_state_a: FlightComputer<StateA> = in_state_d.into();
 
         assert_eq!(
             expected_shared_value_between_states,
@@ -224,7 +224,7 @@ mod tests {
         let expected_state = StateA { a_value: expected_a_value };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_d = FlightComputer::<StateD>::from(in_state_a);
+        let in_state_d: FlightComputer<StateD> = in_state_a.into();
 
         */
     }
@@ -239,9 +239,9 @@ mod tests {
         let expected_state = StateC { c_value: expected_c_value };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_c = FlightComputer::<StateC>::from(in_state_a);
-        let in_state_d = FlightComputer::<StateD>::from(in_state_c);
-        let in_state_d = FlightComputer::<StateC>::from(in_state_d);
+        let in_state_c: FlightComputer<StateC> = in_state_a.into();
+        let in_state_d: FlightComputer<StateD> = in_state_c.into();
+        let in_state_c: FlightComputer<StateC> = in_state_d.into();
 
         */
     }
@@ -256,8 +256,8 @@ mod tests {
         let expected_state = StateA { a_value: expected_a_value };
 
         let in_state_a = FlightComputer::<StateA>::new(expected_shared_value_between_states);
-        let in_state_b = FlightComputer::<StateB>::from(in_state_a);
-        let in_state_a = FlightComputer::<StateA>::from(in_state_b);
+        let in_state_b: FlightComputer<StateB> = in_state_a.into();
+        let in_state_a: FlightComputer<StateA> = in_state_b.into();
 
         */
     }
