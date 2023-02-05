@@ -7,7 +7,7 @@ pub struct FlightComputer<S> {
 const DEFAULT_VALUE: usize = 10;
 
 impl FlightComputer<StateA> {
-    fn new(shared_value_between_states: usize) -> Self {
+    pub fn new(shared_value_between_states: usize) -> Self {
         FlightComputer {
             shared_value_between_states,
             state: StateA {
@@ -93,7 +93,7 @@ impl From<FlightComputer<StateC>> for FlightComputer<StateD> {
 
 #[cfg(test)]
 mod tests {
-    use crate::state::flight_computer::{FlightComputer, StateA, StateB, StateC, StateD};
+    use crate::flight_computer::flight_computer::{FlightComputer, StateA, StateB, StateC, StateD};
 
     // test A can go to B
     #[test]
