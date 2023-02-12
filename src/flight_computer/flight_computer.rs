@@ -12,7 +12,7 @@ impl FlightComputer {
         }
     }
 
-    pub fn next(self) -> FlightComputer {
+    pub fn next_state(self) -> Self {
         match self.state {
             State::StateA(val) => {
                 if self.shared_data > 0 {
@@ -26,6 +26,13 @@ impl FlightComputer {
         }
         // TODO: remove this line
         FlightComputer::new(1)
+    }
+
+    pub fn update_data(self) -> Self {
+        return FlightComputer {
+            shared_data: self.shared_data + 1,
+            state: self.state,
+        }
     }
 }
 
@@ -63,7 +70,7 @@ mod tests {
             state: State::StateB(StateB {}),
         };
 
-        let flight_computer = flight_computer.next();
+        let flight_computer = flight_computer.next_state();
 
         assert_eq!(flight_computer, expected_flight_computer);
     }
