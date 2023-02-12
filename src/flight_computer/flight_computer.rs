@@ -1,35 +1,38 @@
 #[derive(PartialEq, Debug)]
-enum FlightComputer {
-    StateA(FlightComputerStateMachine<StateA>),
-    StateB(FlightComputerStateMachine<StateB>),
+struct FlightComputer {
+    shared_data: usize,
+    state: State,
 }
 
 impl FlightComputer {
     pub fn new(shared_data: usize) -> FlightComputer {
-        FlightComputer::StateA(FlightComputerStateMachine {
+        FlightComputer {
             shared_data,
-            state: StateA {},
-        })
+            state: State::StateA(StateA {}),
+        }
     }
 
-    pub fn next(self) -> Self {
-        match self {
-            FlightComputer::StateA(val) => {
-                if val.shared_data > 0 {
-                    FlightComputer::StateB(val.into())
-                } else {
-                    FlightComputer::StateA(val.into())
+    pub fn next(self) -> FlightComputer {
+        match self.state {
+            State::StateA(val) => {
+                if self.shared_data > 0 {
+                    return FlightComputer {
+                        shared_data: self.shared_data,
+                        state: State::StateB(val.into()),
+                    };
                 }
             }
-            FlightComputer::StateB(val) => FlightComputer::StateB(val.into()),
+            _ => {}
         }
+        // TODO: remove this line
+        FlightComputer::new(1)
     }
 }
 
 #[derive(PartialEq, Debug)]
-struct FlightComputerStateMachine<S> {
-    shared_data: usize,
-    state: S,
+enum State {
+    StateA(StateA),
+    StateB(StateB),
 }
 
 #[derive(PartialEq, Debug)]
@@ -38,12 +41,9 @@ pub struct StateA {}
 #[derive(PartialEq, Debug)]
 pub struct StateB {}
 
-impl From<FlightComputerStateMachine<StateA>> for FlightComputerStateMachine<StateB> {
-    fn from(prev: FlightComputerStateMachine<StateA>) -> Self {
-        FlightComputerStateMachine {
-            shared_data: prev.shared_data,
-            state: StateB {},
-        }
+impl From<StateA> for StateB {
+    fn from(_prev: StateA) -> Self {
+        StateB {}
     }
 }
 
@@ -58,19 +58,14 @@ mod tests {
     fn given_state_a_when_shared_data_gt_0_then_state_b() {
         let shared_data = 1;
         let flight_computer = FlightComputer::new(shared_data);
-        let expected_flight_computer_state_machine = FlightComputerStateMachine {
+        let expected_flight_computer = FlightComputer {
             shared_data,
-            state: StateB {},
+            state: State::StateB(StateB {}),
         };
 
         let flight_computer = flight_computer.next();
 
-        if let FlightComputer::StateB(flight_computer_state_machine) = flight_computer {
-            assert_eq!(
-                flight_computer_state_machine,
-                expected_flight_computer_state_machine
-            )
-        }
+        assert_eq!(flight_computer, expected_flight_computer);
     }
 
     // Given I am in state A
