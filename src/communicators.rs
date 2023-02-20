@@ -1,2 +1,3 @@
-pub mod destinations;
-pub mod csc;
+pub mod command_parser;
+pub mod server_communicator;
+pub mod board_communicator;

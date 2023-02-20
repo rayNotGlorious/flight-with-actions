@@ -1,6 +1,6 @@
 mod flight_computer;
 mod communicators;
-use communicators::{destinations, csc};
+use communicators::{command_parser};
 
 fn main() {
 }
