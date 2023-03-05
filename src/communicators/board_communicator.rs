@@ -1,4 +1,6 @@
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, UdpSocket, IpAddr, Ipv4Addr};
+use std::process::Command;
+use std::str::FromStr;
 use crate::command_parser;
 
 // Board Communicator runs on the FS Flight Computer
@@ -7,6 +9,7 @@ use crate::command_parser;
 pub struct BoardCommunicator {
     addr: SocketAddr,
     socket: Option<UdpSocket>,
+    pub mcast: Option<SocketAddr>,
     deployed: bool,
 }
 
@@ -16,6 +19,7 @@ impl BoardCommunicator {
         BoardCommunicator {
             addr,
             socket: None, 
+            mcast: None,
             deployed: false,
         }
     }
@@ -30,10 +34,36 @@ impl BoardCommunicator {
         }
     }
 
+    pub fn multicast_setup(&mut self) {
+        let mcast = Ipv4Addr::new(224, 0, 0, 1);
+        let mut any = Ipv4Addr::new(192, 168, 6, 2);
+
+        // gets Beaglebone interface IP 
+        let network_ip = Command::new("sh")
+                            .arg("-c")
+                            .arg("ip addr show eth0 | grep inet | awk '{print $2}' | cut -d '/' -f1")
+                            .output()
+                            .expect("failed to execute process");
+                    
+        if network_ip.stdout.len() != 0 {
+            let stdout = String::from_utf8_lossy(&network_ip.stdout);
+            any = Ipv4Addr::from_str(stdout.trim()).expect("failed to parse network IP address");
+        }
+
+        let mcast_addr = SocketAddr::new(IpAddr::V4(mcast), 6000);
+        self.mcast = Some(mcast_addr);
+
+        if let Some(ref socket) = self.socket {
+            socket.join_multicast_v4(&mcast, &any);
+        } else {
+            panic!("Failed to join multicast group");
+        }
+    }
+
     pub fn send(&self, message: &Vec<u8>, dst: &SocketAddr) -> usize {
         if let Some(ref socket) = self.socket {
             let sent_bytes = socket.send_to(message, &dst).expect("failed to send message");
-            println!("{:?} bytes sent", sent_bytes);
+            println!("{:?} bytes sent from {:?}", sent_bytes, self.addr);
             return sent_bytes;
         } 
         
@@ -48,6 +78,7 @@ impl BoardCommunicator {
 
             // route data to destination denoted in message header
             if let Some(routing_addr) = command_parser::parse(&buf) {
+                println!("routing address: {:?}", routing_addr);
                 self.send(buf, routing_addr);
             }
 
