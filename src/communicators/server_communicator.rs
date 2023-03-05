@@ -45,7 +45,7 @@ impl ControlServerCommunicator {
     pub fn send_server(&mut self, message: &Vec<u8>) -> usize {
         if let Some(ref mut server) = self.server {
             let sent_bytes = server.write(message).expect("Failed to send message");
-            println!("{:?} bytes sent", sent_bytes);
+            println!("{:?} bytes sent from {:?}", sent_bytes, self.addr);
             return sent_bytes;
         }
 
@@ -56,7 +56,7 @@ impl ControlServerCommunicator {
     pub fn send_udp(&self, message: &Vec<u8>, dst: &SocketAddr) -> usize {
         if let Some(ref socket) = self.socket {
             let sent_bytes = socket.send_to(message, &dst).expect("failed to send message");
-            println!("{:?} bytes sent", sent_bytes);
+            println!("{:?} bytes sent from {:?}", sent_bytes, self.addr);
             return sent_bytes;
         } 
         

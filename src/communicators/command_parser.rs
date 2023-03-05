@@ -66,6 +66,8 @@ pub fn parse(message: &Vec<u8>) -> Option<&SocketAddr> {
                     panic!("Couldn't access node's board id")
                 },
 
+                command::mod_Command::OneOfcommand::device_discovery(..) => None,
+
                 command::mod_Command::OneOfcommand::None => None,
             }
 
