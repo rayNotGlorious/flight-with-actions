@@ -1,7 +1,8 @@
 use std::net::{SocketAddr, UdpSocket, IpAddr, Ipv4Addr};
+use std::collections::HashMap;
 use std::process::Command;
 use std::str::FromStr;
-use crate::command_parser;
+use crate::communicators::Communicator;
 
 // Board Communicator runs on the FS Flight Computer
 // Relays messages to and from the Control Server Communicator, the SAM modules, and the BMS
@@ -10,7 +11,18 @@ pub struct BoardCommunicator {
     addr: SocketAddr,
     socket: Option<UdpSocket>,
     pub mcast: Option<SocketAddr>,
+    mappings: HashMap<u32, SocketAddr>,
     deployed: bool,
+}
+
+impl Communicator for BoardCommunicator {
+    fn get_mappings(&self, board_id: &u32) -> Option<&SocketAddr> {
+        if let Some(address) = self.mappings.get(board_id) {
+            Some(address)
+        } else {
+            panic!("Couldn't get address mapping")
+        }
+    }
 }
 
 impl BoardCommunicator {
@@ -20,6 +32,7 @@ impl BoardCommunicator {
             addr,
             socket: None, 
             mcast: None,
+            mappings: HashMap::new(),
             deployed: false,
         }
     }
@@ -43,18 +56,18 @@ impl BoardCommunicator {
                             .arg("-c")
                             .arg("ip addr show eth0 | grep inet | awk '{print $2}' | cut -d '/' -f1")
                             .output()
-                            .expect("failed to execute process");
+                            .expect("Failed to execute process");
                     
         if network_ip.stdout.len() != 0 {
             let stdout = String::from_utf8_lossy(&network_ip.stdout);
-            any = Ipv4Addr::from_str(stdout.trim()).expect("failed to parse network IP address");
+            any = Ipv4Addr::from_str(stdout.trim()).expect("Failed to parse network IP address");
         }
 
         let mcast_addr = SocketAddr::new(IpAddr::V4(mcast), 6000);
         self.mcast = Some(mcast_addr);
 
         if let Some(ref socket) = self.socket {
-            socket.join_multicast_v4(&mcast, &any);
+            socket.join_multicast_v4(&mcast, &any).expect("failed to join multicast group");
         } else {
             panic!("Failed to join multicast group");
         }
@@ -71,15 +84,19 @@ impl BoardCommunicator {
     }
 
     // Reads in data over UDP
-    pub fn listen(&self, buf: &mut Vec<u8>) -> (usize, SocketAddr) {
+    pub fn listen(&mut self, buf: &mut Vec<u8>) -> (usize, SocketAddr) {
         if let Some(ref socket) = self.socket {
             let (num_bytes, src_addr) = socket.recv_from(buf).expect("Failed to receive data");
             println!("{:?} bytes received from {:?}", num_bytes, src_addr);
 
-            // route data to destination denoted in message header
-            if let Some(routing_addr) = command_parser::parse(&buf) {
-                println!("routing address: {:?}", routing_addr);
-                self.send(buf, routing_addr);
+            let (board_id, routing_addr) = self.parse(&buf);
+
+            if let None = routing_addr {
+                if let Some(id) = board_id {
+                    self.mappings.insert(id, src_addr);
+                }
+            } else if let Some(addr) = routing_addr {
+                self.send(buf, addr);
             }
 
             return (num_bytes, src_addr);
@@ -88,3 +105,4 @@ impl BoardCommunicator {
         panic!("The socket hasn't been initialized yet");
     }
 }
+
