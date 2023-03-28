@@ -1,6 +1,7 @@
 use std::net::{SocketAddr, UdpSocket, TcpStream, IpAddr, Ipv4Addr};
 use std::io::prelude::*;
-use crate::command_parser;
+use std::collections::HashMap;
+use crate::communicators::Communicator;
 
 // The Control Server Communicator runs on the FS Flight Computer
 // Uses TCP to communicate with the Control Server and UDP to the Board Communicator 
@@ -8,7 +9,18 @@ pub struct ControlServerCommunicator {
     addr: SocketAddr,
     socket: Option<UdpSocket>,
     server: Option<TcpStream>,
+    mappings: HashMap<u32, SocketAddr>,
     deployed: bool,
+}
+
+impl Communicator for ControlServerCommunicator {
+    fn get_mappings(&self, board_id: &u32) -> Option<&SocketAddr> {
+        if let Some(address) = self.mappings.get(board_id) {
+            Some(address)
+        } else {
+            panic!("Couldn't get address mapping")
+        }
+    }
 }
 
 impl ControlServerCommunicator {
@@ -18,6 +30,7 @@ impl ControlServerCommunicator {
             addr, 
             socket: None,
             server: None,
+            mappings: HashMap::new(),
             deployed: false,
         }
     }
@@ -69,9 +82,10 @@ impl ControlServerCommunicator {
             let num_bytes = stream.read(buf).expect("Failed to receive data from control server");
             println!("{:?} bytes received", num_bytes);
 
-            // route data to destination denoted in message header
-            if let Some(routing_addr) = command_parser::parse(&buf) {
-                self.send_udp(buf, routing_addr);
+            let (_, routing_addr) = self.parse(&buf);
+
+            if let Some(addr) = routing_addr {
+                self.send_udp(buf, addr);
             }
 
             return num_bytes;
@@ -79,17 +93,22 @@ impl ControlServerCommunicator {
         panic!("The server stream hasn't been initialized yet");
     }   
 
-    // Reads in data over UDP and stores it in a circular buffer
+    // Reads in data over UDP 
     pub fn listen_board(&mut self, buf: &mut Vec<u8>) -> (usize, SocketAddr) {
         if let Some(ref socket) = self.socket {
             let (num_bytes, src_addr) = socket.recv_from(buf).expect("Failed to receive data");
             println!("{:?} bytes received from {:?}", num_bytes, src_addr);
-            
-            // route data to destination denoted in message header
-            if let Some(routing_addr) = command_parser::parse(&buf) {
-                if routing_addr.ip() == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
+
+            let (board_id, routing_addr) = self.parse(&buf);
+
+            if let None = routing_addr {
+                if let Some(id) = board_id {
+                    self.mappings.insert(id, src_addr);
+                }
+            } else if let Some(addr) = routing_addr {
+                if addr.ip() == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
                     // send to FC (self)
-                    self.send_udp(buf, routing_addr);
+                    self.send_udp(buf, addr);
                 } else {
                     self.send_server(buf);
                 }
