@@ -21,6 +21,10 @@ impl Communicator for ControlServerCommunicator {
             panic!("Couldn't get address mapping")
         }
     }
+
+    fn set_mappings(&mut self, board_id: u32, ip_addr: SocketAddr) {
+        self.mappings.insert(board_id, ip_addr);
+    }
 }
 
 impl ControlServerCommunicator {
@@ -76,7 +80,19 @@ impl ControlServerCommunicator {
         panic!("The socket hasn't been initialized yet");
     }
 
-    // Reads in data from the control server over TCP 
+    // Sends data to the Board Communicator using port forwarding 
+    pub fn port_forwarding(&self, message: &Vec<u8>, dst: &SocketAddr) -> usize {
+        if let Some(ref socket) = self.socket {
+            let sent_bytes = socket.send_to(message, &dst).expect("failed to send message");
+            println!("{:?} bytes sent from {:?}", sent_bytes, self.addr);
+            return sent_bytes;
+        } 
+        
+        panic!("The socket hasn't been initialized yet");
+    }
+
+    // Reads in data from the control server over TCP
+    // Forwards data to FC or Board Communicator 
     pub fn listen_server(&mut self, buf: &mut Vec<u8>) -> usize {
         if let Some(ref mut stream) = self.server {
             let num_bytes = stream.read(buf).expect("Failed to receive data from control server");
@@ -99,13 +115,9 @@ impl ControlServerCommunicator {
             let (num_bytes, src_addr) = socket.recv_from(buf).expect("Failed to receive data");
             println!("{:?} bytes received from {:?}", num_bytes, src_addr);
 
-            let (board_id, routing_addr) = self.parse(&buf);
+            let (_board_id, routing_addr) = self.parse(&buf);
 
-            if let None = routing_addr {
-                if let Some(id) = board_id {
-                    self.mappings.insert(id, src_addr);
-                }
-            } else if let Some(addr) = routing_addr {
+            if let Some(addr) = routing_addr {
                 if addr.ip() == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
                     // send to FC (self)
                     self.send_udp(buf, addr);

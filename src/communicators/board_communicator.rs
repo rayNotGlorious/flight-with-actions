@@ -1,7 +1,5 @@
-use std::net::{SocketAddr, UdpSocket, IpAddr, Ipv4Addr};
+use std::net::{SocketAddr, UdpSocket};
 use std::collections::HashMap;
-use std::process::Command;
-use std::str::FromStr;
 use crate::communicators::Communicator;
 
 // Board Communicator runs on the FS Flight Computer
@@ -10,7 +8,6 @@ use crate::communicators::Communicator;
 pub struct BoardCommunicator {
     addr: SocketAddr,
     socket: Option<UdpSocket>,
-    pub mcast: Option<SocketAddr>,
     mappings: HashMap<u32, SocketAddr>,
     deployed: bool,
 }
@@ -23,6 +20,10 @@ impl Communicator for BoardCommunicator {
             panic!("Couldn't get address mapping")
         }
     }
+
+    fn set_mappings(&mut self, board_id: u32, ip_addr: SocketAddr) {
+        self.mappings.insert(board_id, ip_addr);
+    }
 }
 
 impl BoardCommunicator {
@@ -31,7 +32,6 @@ impl BoardCommunicator {
         BoardCommunicator {
             addr,
             socket: None, 
-            mcast: None,
             mappings: HashMap::new(),
             deployed: false,
         }
@@ -44,32 +44,6 @@ impl BoardCommunicator {
             self.deployed = true;
         } else {
             panic!("Could not attach socket to address and port");
-        }
-    }
-
-    pub fn multicast_setup(&mut self) {
-        let mcast = Ipv4Addr::new(224, 0, 0, 1);
-        let mut any = Ipv4Addr::new(192, 168, 6, 2);
-
-        // gets Beaglebone interface IP 
-        let network_ip = Command::new("sh")
-                            .arg("-c")
-                            .arg("ip addr show eth0 | grep inet | awk '{print $2}' | cut -d '/' -f1")
-                            .output()
-                            .expect("Failed to execute process");
-                    
-        if network_ip.stdout.len() != 0 {
-            let stdout = String::from_utf8_lossy(&network_ip.stdout);
-            any = Ipv4Addr::from_str(stdout.trim()).expect("Failed to parse network IP address");
-        }
-
-        let mcast_addr = SocketAddr::new(IpAddr::V4(mcast), 6000);
-        self.mcast = Some(mcast_addr);
-
-        if let Some(ref socket) = self.socket {
-            socket.join_multicast_v4(&mcast, &any).expect("failed to join multicast group");
-        } else {
-            panic!("Failed to join multicast group");
         }
     }
 
@@ -89,13 +63,9 @@ impl BoardCommunicator {
             let (num_bytes, src_addr) = socket.recv_from(buf).expect("Failed to receive data");
             println!("{:?} bytes received from {:?}", num_bytes, src_addr);
 
-            let (board_id, routing_addr) = self.parse(&buf);
+            let (_, routing_addr) = self.parse(&buf);
 
-            if let None = routing_addr {
-                if let Some(id) = board_id {
-                    self.mappings.insert(id, src_addr);
-                }
-            } else if let Some(addr) = routing_addr {
+            if let Some(addr) = routing_addr {
                 self.send(buf, addr);
             }
 
