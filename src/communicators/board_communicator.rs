@@ -1,6 +1,10 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::collections::HashMap;
 use crate::communicators::Communicator;
+use fs_protobuf_rust::compiled::google::protobuf::Timestamp;
+use fs_protobuf_rust::compiled::mcfs::{core, command, device};
+use fs_protobuf_rust::compiled::mcfs::device::DeviceType;
+use quick_protobuf::serialize_into_vec;
 
 // Board Communicator runs on the FS Flight Computer
 // Relays messages to and from the Control Server Communicator, the SAM modules, and the BMS
@@ -8,21 +12,52 @@ use crate::communicators::Communicator;
 pub struct BoardCommunicator {
     addr: SocketAddr,
     socket: Option<UdpSocket>,
-    mappings: HashMap<u32, SocketAddr>,
+    mappings: HashMap<u32, (DeviceType, SocketAddr)>,
     deployed: bool,
 }
 
+pub fn begin(board_comm: &mut BoardCommunicator) {
+    board_comm.send_bind();
+    
+    // PROTOBUF MESSAGE STARTS HERE 
+    let command = command::Command {
+        command: command::mod_Command::OneOfcommand::click_valve(
+            command::ClickValve { 
+                valve: (Some(device::NodeIdentifier {board_id: 10, channel: device::Channel::VALVE, node_id: 0})), 
+                state: (device::ValveState::VALVE_OPEN)
+    })};
+
+    let command_message = core::Message {
+        timestamp: Some(Timestamp {seconds: 1, nanos: 100}),
+        board_id: 5,
+        content: core::mod_Message::OneOfcontent::command(command)
+    };
+
+    let data_serialized = serialize_into_vec(&command_message).expect("Cannot serialize `data`");
+     // PROTOBUF MESSAGE ENDS HERE 
+
+    let destination = board_comm.get_mappings(&10);
+
+    loop {
+        if let Some((_, address)) = destination {
+            let _sent_bytes = board_comm.send(&data_serialized, address);
+        }
+    }
+}
+
 impl Communicator for BoardCommunicator {
-    fn get_mappings(&self, board_id: &u32) -> Option<&SocketAddr> {
-        if let Some(address) = self.mappings.get(board_id) {
-            Some(address)
+    fn get_mappings(&self, board_id: &u32) -> Option<(DeviceType, &SocketAddr)> {
+        if let Some((dev_type, address)) = self.mappings.get(board_id) {
+            Some((*dev_type, address))
         } else {
-            panic!("Couldn't get address mapping")
+            panic!("Couldn't access mapping")
         }
     }
 
-    fn set_mappings(&mut self, board_id: u32, ip_addr: SocketAddr) {
-        self.mappings.insert(board_id, ip_addr);
+    fn update_mappings(&mut self, new_hashmap: &HashMap<u32, (DeviceType, SocketAddr)>) {
+        for (key, value) in new_hashmap.iter() {
+            self.mappings.insert(*key, *value);
+        }
     }
 }
 
@@ -63,7 +98,7 @@ impl BoardCommunicator {
             let (num_bytes, src_addr) = socket.recv_from(buf).expect("Failed to receive data");
             println!("{:?} bytes received from {:?}", num_bytes, src_addr);
 
-            let (_, routing_addr) = self.parse(&buf);
+            let (_, _, routing_addr) = self.parse(&buf);
 
             if let Some(addr) = routing_addr {
                 self.send(buf, addr);

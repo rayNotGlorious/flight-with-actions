@@ -12,7 +12,6 @@ prusst = "1.0"
 
 udp-socket = "0.1.5"
 tcp-stream = "0.24.4"
-circular = "0.3.0"
 quick-protobuf = "0.8.0"
 fs-protobuf-rust = { path = "fs-protobuf-rust" }
-lazy_static = "1.4.0"
+tokio = { version = "1.23" }

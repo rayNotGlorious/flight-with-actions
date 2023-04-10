@@ -1,4 +1,5 @@
 use std::net::{SocketAddr, UdpSocket, TcpStream, IpAddr, Ipv4Addr};
+use fs_protobuf_rust::compiled::mcfs::device::DeviceType;
 use std::io::prelude::*;
 use std::collections::HashMap;
 use crate::communicators::Communicator;
@@ -9,21 +10,23 @@ pub struct ControlServerCommunicator {
     addr: SocketAddr,
     socket: Option<UdpSocket>,
     server: Option<TcpStream>,
-    mappings: HashMap<u32, SocketAddr>,
+    mappings: HashMap<u32, (DeviceType, SocketAddr)>,
     deployed: bool,
 }
 
 impl Communicator for ControlServerCommunicator {
-    fn get_mappings(&self, board_id: &u32) -> Option<&SocketAddr> {
-        if let Some(address) = self.mappings.get(board_id) {
-            Some(address)
+    fn get_mappings(&self, board_id: &u32) -> Option<(DeviceType, &SocketAddr)> {
+        if let Some((dev_type, address)) = self.mappings.get(board_id) {
+            Some((*dev_type, address))
         } else {
-            panic!("Couldn't get address mapping")
+            panic!("Couldn't access mapping")
         }
     }
 
-    fn set_mappings(&mut self, board_id: u32, ip_addr: SocketAddr) {
-        self.mappings.insert(board_id, ip_addr);
+    fn update_mappings(&mut self, new_hashmap: &HashMap<u32, (DeviceType, SocketAddr)>) {
+        for (key, value) in (*new_hashmap).iter() {
+            self.mappings.insert(*key, *value);
+        }
     }
 }
 
@@ -80,17 +83,6 @@ impl ControlServerCommunicator {
         panic!("The socket hasn't been initialized yet");
     }
 
-    // Sends data to the Board Communicator using port forwarding 
-    pub fn port_forwarding(&self, message: &Vec<u8>, dst: &SocketAddr) -> usize {
-        if let Some(ref socket) = self.socket {
-            let sent_bytes = socket.send_to(message, &dst).expect("failed to send message");
-            println!("{:?} bytes sent from {:?}", sent_bytes, self.addr);
-            return sent_bytes;
-        } 
-        
-        panic!("The socket hasn't been initialized yet");
-    }
-
     // Reads in data from the control server over TCP
     // Forwards data to FC or Board Communicator 
     pub fn listen_server(&mut self, buf: &mut Vec<u8>) -> usize {
@@ -98,7 +90,7 @@ impl ControlServerCommunicator {
             let num_bytes = stream.read(buf).expect("Failed to receive data from control server");
             println!("{:?} bytes received", num_bytes);
 
-            let (_, routing_addr) = self.parse(&buf);
+            let (_, _, routing_addr) = self.parse(&buf);
 
             if let Some(addr) = routing_addr {
                 self.send_udp(buf, addr);
@@ -115,7 +107,7 @@ impl ControlServerCommunicator {
             let (num_bytes, src_addr) = socket.recv_from(buf).expect("Failed to receive data");
             println!("{:?} bytes received from {:?}", num_bytes, src_addr);
 
-            let (_board_id, routing_addr) = self.parse(&buf);
+            let (_board_id, _, routing_addr) = self.parse(&buf);
 
             if let Some(addr) = routing_addr {
                 if addr.ip() == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
