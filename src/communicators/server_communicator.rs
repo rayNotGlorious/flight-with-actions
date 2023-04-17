@@ -23,10 +23,18 @@ impl Communicator for ControlServerCommunicator {
         }
     }
 
-    fn update_mappings(&mut self, new_hashmap: &HashMap<u32, (DeviceType, SocketAddr)>) {
-        for (key, value) in (*new_hashmap).iter() {
+    fn update_mappings(&mut self, new_hashmap: &HashMap<u32, (DeviceType, SocketAddr)>) -> HashMap<u32, (DeviceType, SocketAddr)> {
+        for (key, value) in new_hashmap.iter() {
             self.mappings.insert(*key, *value);
         }
+
+        // for testing purposes
+        for (key, value) in self.mappings.iter() {
+            let (device, address) = value;
+            println!("board id: {:?}, device type: {:?}, ip address: {:?}", *key, *device, *address);
+        }
+
+        self.mappings.clone()
     }
 }
 
