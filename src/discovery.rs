@@ -7,12 +7,20 @@ use quick_protobuf::{serialize_into_vec, deserialize_from_slice};
 
 pub struct DeviceDiscovery {
     pub mappings: HashMap<u32, (DeviceType, SocketAddr)>,
+    socket: Option<UdpSocket>,
+    mcast_group: Option<Ipv4Addr>,
+    port: Option<u16>,
+    response: Option<Vec<u8>>
 }
 
 impl DeviceDiscovery {
     pub fn new() -> DeviceDiscovery {
         DeviceDiscovery {
             mappings: HashMap::new(),
+            socket: None,
+            mcast_group: None,
+            port: None,
+            response: None
         }
     }
 }
@@ -32,9 +40,7 @@ fn parse(message: &Vec<u8>) -> (Option<u32>, Option<DeviceType>, Option<&SocketA
     }
 }
 
-pub fn begin() {
-    let mut device_discovery = DeviceDiscovery::new();
-
+pub fn init_mcast(device: &mut DeviceDiscovery) {
     let mcast_group: Ipv4Addr = "224.0.0.3".parse().unwrap();
     let port: u16 = 6000;
     let any = "0.0.0.0".parse().unwrap();
@@ -59,27 +65,47 @@ pub fn begin() {
 
     let response_serialized = serialize_into_vec(&response).expect("Could not serialize discovery response");
 
+    device.mcast_group = Some(mcast_group);
+    device.port = Some(port);
+    device.socket = Some(socket);
+    device.response = Some(response_serialized);
+}
+
+pub fn recv_mcast(device: &mut DeviceDiscovery) -> &HashMap<u32, (DeviceType, SocketAddr)> {
+
     let mut buffer = vec![0u8; 1600];
 
-    loop {
+    if let Some(ref socket) = device.socket {
         let result = socket.recv_from(&mut buffer);
+
         match result {
             Ok((_size, src)) => {
                 // TODO: log discovery message
                 let (board_id, device_type, _) = parse(&buffer);
-
+    
                 if let Some(id) = board_id {
                     if let Some(dev_type) = device_type {
-                        device_discovery.mappings.insert(id, (dev_type, src));
+                        device.mappings.insert(id, (dev_type, src));
+                        println!("{:?}", id);
+                        println!("{:?}", device.mappings.get(&id));
                     }
                 }
-
+    
                 println!("Received discovery message from {}", src);
-                let _result = socket.send_to(&response_serialized, &(mcast_group, port));
+
+                if let Some(mcast_group) = device.mcast_group {
+                    if let Some(port) = device.port {
+                        if let Some(ref response) = device.response {
+                            let _result = socket.send_to(&response, &(mcast_group, port));
+                        }
+                    }
+                }
             }
             Err(_e) => {
                 // TODO: log error
             }
         }
     }
+
+    &device.mappings
 }

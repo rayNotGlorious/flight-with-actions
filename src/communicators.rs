@@ -10,7 +10,7 @@ use fs_protobuf_rust::compiled::mcfs::device::DeviceType;
 
 pub trait Communicator {
     fn get_mappings(&self, board_id: &u32) -> Option<(DeviceType, &SocketAddr)>;
-    fn update_mappings(&mut self, new_hashmap: &HashMap<u32, (DeviceType, SocketAddr)>) -> HashMap<u32, (DeviceType, SocketAddr)>;
+    fn update_mappings(&mut self, new_hashmap: HashMap<u32, (DeviceType, SocketAddr)>) -> HashMap<u32, (DeviceType, SocketAddr)>;
     
     // Demultiplexes protobuf messages via the NodeIdentifier and determines which board to send data to
     fn parse(&self, message: &Vec<u8>) -> (Option<u32>, Option<DeviceType>, Option<&SocketAddr>) {

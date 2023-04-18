@@ -23,7 +23,7 @@ pub fn begin(board_comm: &mut BoardCommunicator) {
     let command = command::Command {
         command: command::mod_Command::OneOfcommand::click_valve(
             command::ClickValve { 
-                valve: (Some(device::NodeIdentifier {board_id: 10, channel: device::Channel::VALVE, node_id: 0})), 
+                valve: (Some(device::NodeIdentifier {board_id: 1, channel: device::Channel::VALVE, node_id: 0})), 
                 state: (device::ValveState::VALVE_OPEN)
     })};
 
@@ -36,11 +36,14 @@ pub fn begin(board_comm: &mut BoardCommunicator) {
     let data_serialized = serialize_into_vec(&command_message).expect("Cannot serialize `data`");
      // PROTOBUF MESSAGE ENDS HERE 
 
-    let destination = board_comm.get_mappings(&10);
+    let destination = board_comm.get_mappings(&1);
 
     loop {
         if let Some((_, address)) = destination {
-            let _sent_bytes = board_comm.send(&data_serialized, address);
+            //let _sent_bytes = board_comm.send(&data_serialized, address);
+            if let Some(ref socket) = board_comm.socket {
+                let _sent_bytes = socket.send_to(&[0; 10], "169.254.153.172:6000").expect("failed to send message");
+            }
         }
     }
 }
@@ -54,7 +57,9 @@ impl Communicator for BoardCommunicator {
         }
     }
 
-    fn update_mappings(&mut self, new_hashmap: &HashMap<u32, (DeviceType, SocketAddr)>) -> HashMap<u32, (DeviceType, SocketAddr)> {
+    fn update_mappings(&mut self, new_hashmap: HashMap<u32, (DeviceType, SocketAddr)>) -> HashMap<u32, (DeviceType, SocketAddr)> {
+        println!("inside update mappings");
+
         for (key, value) in new_hashmap.iter() {
             self.mappings.insert(*key, *value);
         }
@@ -92,7 +97,8 @@ impl BoardCommunicator {
 
     pub fn send(&self, message: &Vec<u8>, dst: &SocketAddr) -> usize {
         if let Some(ref socket) = self.socket {
-            let sent_bytes = socket.send_to(message, &dst).expect("failed to send message");
+            println!("message: {:?}, dst: {:?}", message, dst.to_string().as_str());
+            let sent_bytes = socket.send_to(&[0; 10], "127.0.0.1:6000").expect("failed to send message");
             println!("{:?} bytes sent from {:?}", sent_bytes, self.addr);
             return sent_bytes;
         } 
