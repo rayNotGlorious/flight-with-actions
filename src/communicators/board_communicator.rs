@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, UdpSocket, Ipv4Addr, IpAddr};
 use std::collections::HashMap;
 use crate::communicators::Communicator;
 use fs_protobuf_rust::compiled::google::protobuf::Timestamp;
@@ -38,12 +38,14 @@ pub fn begin(board_comm: &mut BoardCommunicator) {
 
     let destination = board_comm.get_mappings(&1);
 
+    // ADDRESS BELOW FOR COMMAND LOOP SOCKET ON SAM 
+    //let sam_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(169, 254, 42, 143)), 8378);
+
     loop {
         if let Some((_, address)) = destination {
-            //let _sent_bytes = board_comm.send(&data_serialized, address);
-            if let Some(ref socket) = board_comm.socket {
-                let _sent_bytes = socket.send_to(&[0; 10], "169.254.153.172:6000").expect("failed to send message");
-            }
+            println!("address: {:?}", address.to_string());
+            let sent_bytes = board_comm.send(&data_serialized, address);
+            println!("bytes sent: {:?}", sent_bytes);
         }
     }
 }
@@ -62,12 +64,6 @@ impl Communicator for BoardCommunicator {
 
         for (key, value) in new_hashmap.iter() {
             self.mappings.insert(*key, *value);
-        }
-
-        // for testing purposes
-        for (key, value) in self.mappings.iter() {
-            let (device, address) = value;
-            println!("board id: {:?}, device type: {:?}, ip address: {:?}", *key, *device, *address);
         }
 
         self.mappings.clone()
@@ -98,7 +94,7 @@ impl BoardCommunicator {
     pub fn send(&self, message: &Vec<u8>, dst: &SocketAddr) -> usize {
         if let Some(ref socket) = self.socket {
             println!("message: {:?}, dst: {:?}", message, dst.to_string().as_str());
-            let sent_bytes = socket.send_to(&[0; 10], "127.0.0.1:6000").expect("failed to send message");
+            let sent_bytes = socket.send_to(message, dst.to_string()).expect("failed to send message");
             println!("{:?} bytes sent from {:?}", sent_bytes, self.addr);
             return sent_bytes;
         } 

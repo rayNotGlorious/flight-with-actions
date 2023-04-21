@@ -14,6 +14,26 @@ pub struct ControlServerCommunicator {
     deployed: bool,
 }
 
+pub fn begin(server_comm: &mut ControlServerCommunicator) {
+    // let server_addr = server_comm.get_mappings(&150);
+
+    // if let Some((_, address)) = server_addr {
+    //     server_comm.server_connect(&address);
+    // }
+    
+    // PROTOBUF MESSAGE STARTS HERE 
+    // INSERT MESSAGE TO SEND FROM FC to SERVER 
+    // PROTOBUF MESSAGE ENDS HERE 
+
+    loop {
+        // if let Some((_, address)) = destination {
+        //     println!("address: {:?}", address.to_string());
+        //     let sent_bytes = board_comm.send(&data_serialized, address);
+        //     println!("bytes sent: {:?}", sent_bytes);
+        // }
+    }
+}
+
 impl Communicator for ControlServerCommunicator {
     fn get_mappings(&self, board_id: &u32) -> Option<(DeviceType, &SocketAddr)> {
         if let Some((dev_type, address)) = self.mappings.get(board_id) {
@@ -24,16 +44,12 @@ impl Communicator for ControlServerCommunicator {
     }
 
     fn update_mappings(&mut self, new_hashmap: HashMap<u32, (DeviceType, SocketAddr)>) -> HashMap<u32, (DeviceType, SocketAddr)> {
+        println!("inside update mappings");
+
         for (key, value) in new_hashmap.iter() {
             self.mappings.insert(*key, *value);
         }
-
-        // for testing purposes
-        for (key, value) in self.mappings.iter() {
-            let (device, address) = value;
-            println!("board id: {:?}, device type: {:?}, ip address: {:?}", *key, *device, *address);
-        }
-
+        
         self.mappings.clone()
     }
 }
@@ -118,7 +134,7 @@ impl ControlServerCommunicator {
             let (_board_id, _, routing_addr) = self.parse(&buf);
 
             if let Some(addr) = routing_addr {
-                if addr.ip() == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
+                if addr.ip() == IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)) {
                     // send to FC (self)
                     self.send_udp(buf, addr);
                 } else {
