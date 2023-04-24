@@ -1,6 +1,7 @@
 pub mod flight_computer;
 pub mod communicators;
 pub mod discovery;
+use fs_protobuf_rust::compiled::mcfs::device::DeviceType;
 use std::{thread, net::{SocketAddr, IpAddr, Ipv4Addr}};
 use discovery::DeviceDiscovery;
 use fc::{communicators::{board_communicator::{self, BoardCommunicator}, Communicator, server_communicator::{ControlServerCommunicator, self}}};
@@ -14,18 +15,42 @@ fn main() {
     let mut board_comm = BoardCommunicator::new(board_comm_addr);
     let mut server_comm = ControlServerCommunicator::new(sock_comm_addr);
 
+    // discovery to board comm
     let (tx1, rx1) = mpsc::channel();
+
+    // discovery to server comm
     let (tx2, rx2) = mpsc::channel();
+
+    // server comm to board comm 
+    let (tx3, rx3) = mpsc::channel();
+
+    // board comm to server comm
+    //let (tx4, rx4) = mpsc::channel();
 
     let discovery_loop = thread::spawn(move || {
         discovery::init_mcast(&mut discover);
 
         loop {
             discovery::recv_mcast(&mut discover);
-            println!("{:?}", discover.mappings.get(&1));
 
             tx1.send((discover.mappings).clone()).unwrap();
-            tx2.send((discover.mappings).clone()).unwrap();
+
+            // directly send server address
+            for (_, (dev_type, addr)) in (discover.mappings).clone() {
+                if dev_type == DeviceType::SERVER {
+                    tx2.send(addr).unwrap();
+                }
+            }
+        }
+    });
+
+    let server_comm_loop = thread::spawn(move || {
+        let server_addr = rx2.recv().unwrap();
+        println!("server address over channel: {:?}", server_addr);
+
+        loop {
+            let server_recv = server_communicator::begin(&mut server_comm, server_addr);
+            tx3.send(server_recv).unwrap();
         }
     });
 
@@ -34,22 +59,14 @@ fn main() {
         board_comm.update_mappings(hashmap);
 
         loop {
-            board_communicator::begin(&mut board_comm);
-        }
-    });
-
-    let server_comm_loop = thread::spawn(move || {
-        let hashmap = rx2.recv().unwrap();
-        server_comm.update_mappings(hashmap);
-
-        loop {
-            server_communicator::begin(&mut server_comm)
+            let server_forwarded = rx3.recv().unwrap();
+            board_communicator::begin(&mut board_comm, server_forwarded);
         }
     });
 
     discovery_loop.join();
+    server_comm_loop.join();
     board_comm_loop.join();
-    //server_comm_loop.join();
 }
 
 

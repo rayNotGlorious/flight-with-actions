@@ -1,10 +1,7 @@
-use std::net::{SocketAddr, UdpSocket, Ipv4Addr, IpAddr};
+use std::net::{SocketAddr, UdpSocket};
 use std::collections::HashMap;
 use crate::communicators::Communicator;
-use fs_protobuf_rust::compiled::google::protobuf::Timestamp;
-use fs_protobuf_rust::compiled::mcfs::{core, command, device};
 use fs_protobuf_rust::compiled::mcfs::device::DeviceType;
-use quick_protobuf::serialize_into_vec;
 
 // Board Communicator runs on the FS Flight Computer
 // Relays messages to and from the Control Server Communicator, the SAM modules, and the BMS
@@ -16,38 +13,19 @@ pub struct BoardCommunicator {
     deployed: bool,
 }
 
-pub fn begin(board_comm: &mut BoardCommunicator) {
+pub fn begin(board_comm: &mut BoardCommunicator, forwarded_message: Vec<u8>) {
     board_comm.send_bind();
-    
-    // PROTOBUF MESSAGE STARTS HERE 
-    let command = command::Command {
-        command: command::mod_Command::OneOfcommand::click_valve(
-            command::ClickValve { 
-                valve: (Some(device::NodeIdentifier {board_id: 1, channel: device::Channel::VALVE, node_id: 0})), 
-                state: (device::ValveState::VALVE_OPEN)
-    })};
 
-    let command_message = core::Message {
-        timestamp: Some(Timestamp {seconds: 1, nanos: 100}),
-        board_id: 5,
-        content: core::mod_Message::OneOfcontent::command(command)
-    };
+    let (_, _, routing_addr) = board_comm.parse(&forwarded_message);
 
-    let data_serialized = serialize_into_vec(&command_message).expect("Cannot serialize `data`");
-     // PROTOBUF MESSAGE ENDS HERE 
-
-    let destination = board_comm.get_mappings(&1);
+    if let Some(addr) = routing_addr {
+        // send data to destination  
+        let sent_bytes = board_comm.send(&forwarded_message, addr);
+        println!("bytes sent: {:?}", sent_bytes);
+    }
 
     // ADDRESS BELOW FOR COMMAND LOOP SOCKET ON SAM 
     //let sam_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(169, 254, 42, 143)), 8378);
-
-    loop {
-        if let Some((_, address)) = destination {
-            println!("address: {:?}", address.to_string());
-            let sent_bytes = board_comm.send(&data_serialized, address);
-            println!("bytes sent: {:?}", sent_bytes);
-        }
-    }
 }
 
 impl Communicator for BoardCommunicator {
