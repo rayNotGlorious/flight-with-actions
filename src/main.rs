@@ -6,6 +6,7 @@ use std::{thread, net::{SocketAddr, IpAddr, Ipv4Addr}};
 use discovery::get_ips;
 use fc::{communicators::{board_communicator::{self, BoardCommunicator}, Communicator, server_communicator::{ControlServerCommunicator, self}}};
 use std::sync::mpsc;
+use flight_computer::state;
 
 fn main() {
     // let mut discover = DeviceDiscovery::new();
@@ -67,10 +68,19 @@ fn main() {
     // discovery_loop.join();
     // server_comm_loop.join();
     // board_comm_loop.join();
-    let hostnames= ["flight-computer-01.local", "server-01.local", "sam-01.local"];
-    let ips = get_ips(&hostnames);
-    println!("ips: {:?}", ips);
+    // let hostnames= ["flight-computer-01.local", "server-01.local", "sam-01.local"];
+    // let ips = get_ips(&hostnames);
+    // println!("ips: {:?}", ips);
     // assert!(ips.contains(&"127.0.0.1".parse().unwrap()));
+    //let mut flight_computer = flight_computer::FlightComputer::new();
+    let mut fc_state = state::State::Init;
+    let mut data = state::Data::new();
+    loop {
+        fc_state = fc_state.next(&mut data);
+        thread::sleep(std::time::Duration::from_secs(3));
+    }
+
+
 }
 
 
