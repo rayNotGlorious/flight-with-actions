@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::{IpAddr, SocketAddr}, io::Read};
+use std::{collections::HashMap, net::{IpAddr, SocketAddr, UdpSocket}, io::Read};
 use quick_protobuf::{deserialize_from_slice, Error};
 
 use crate::discovery::get_ips;
@@ -6,8 +6,8 @@ use std::net::TcpStream;
 
 use fs_protobuf_rust::compiled::mcfs::core;
 
-const SERVER_ADDR: &str = "localhost";
-const HOSTNAMES: [&str; 1] = [SERVER_ADDR];
+const SERVER_ADDR: &str = "Jeffs-MacBook-Pro.local";
+const HOSTNAMES: [&str; 2] = [SERVER_ADDR, "sam-01.local"];
 
 pub struct Data {
     ip_addresses: HashMap<String, Option<IpAddr>>,
@@ -66,6 +66,7 @@ impl State {
                 match TcpStream::connect(socket_addr) {
                     Ok(stream) => {
                         data.server = Some(stream);
+                        data.server.as_ref().unwrap().set_nonblocking(false).expect("set_nonblocking call failed");
                         return State::HandleCommands
                     },
                     Err(_e) => {
@@ -75,11 +76,27 @@ impl State {
             }
 
             State::HandleCommands => {
-                let mut buf = [0; 65536];
+                let mut buf = [0; 2000];
                 data.server.as_mut().unwrap().read(&mut buf).expect("No data received");
                 let deserialized: Result<core::Message, Error> = deserialize_from_slice(&buf);
                 println!("{:?}", deserialized);
-                State::HandleCommands
+
+                if let Some(ip) = data.ip_addresses.get("sam-01.local") {
+                    match ip {
+                        Some(ipv4_addr) => {
+                            let socket_addr = SocketAddr::new(*ipv4_addr, 8378);
+                            let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
+                            socket.connect(socket_addr).expect("connect function failed");
+                            socket.send(&buf).expect("couldn't send message");
+                            return State::HandleCommands
+                        },
+                        None => {
+                            return State::DeviceDiscovery
+                        }
+                    }
+                } else {
+                    return State::DeviceDiscovery
+                }
             }
         }
     }

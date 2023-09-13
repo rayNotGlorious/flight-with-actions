@@ -77,7 +77,7 @@ fn main() {
     let mut data = state::Data::new();
     loop {
         fc_state = fc_state.next(&mut data);
-        thread::sleep(std::time::Duration::from_secs(3));
+        // thread::sleep(std::time::Duration::from_secs(3));
     }
 
 
