@@ -13,6 +13,6 @@ prusst = "1.0"
 udp-socket = "0.1.5"
 tcp-stream = "0.24.4"
 quick-protobuf = "0.8.0"
-fs-protobuf-rust = { path = "fs-protobuf-rust" }
 tokio = { version = "1.23" }
 dns-lookup = "2.0.2"
+fs-protobuf-rust = { git = "ssh://git@github-research.gatech.edu/YJSP/fs-protobuf-rust" }
