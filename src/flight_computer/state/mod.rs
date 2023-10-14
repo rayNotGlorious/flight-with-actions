@@ -6,31 +6,29 @@ use std::net::TcpStream;
 
 use fs_protobuf_rust::compiled::mcfs::{core, command};
 
-const SERVER_ADDR: &str = "patrick-XPS-15-9500.local";
-const HOSTNAMES: [&str; 2] = [SERVER_ADDR, "sam-01.local"];
+const SERVER_ADDR: &str = "fs-server-02.local";
+const HOSTNAMES: [&str; 3] = [SERVER_ADDR, "fs-sam-01.local", "fs-sam-02.local"];
 
 pub struct Data {
     ip_addresses: HashMap<String, Option<IpAddr>>,
-    board_ids: HashMap<String, u32>,
+    board_ids: HashMap<u32, String>,
     server: Option<TcpStream>,
     state_num: u32,
-    pub data_socket: UdpSocket,
 }
 
 impl Data {
     pub fn new() -> Data {
         let mut board_ids = HashMap::new();
-        board_ids.insert("sam-01.local".to_string(), 1);
-        board_ids.insert("sam-02.local".to_string(), 2);
-        board_ids.insert("sam-03.local".to_string(), 3);
-        board_ids.insert("sam-04.local".to_string(), 4);
+        board_ids.insert(1, "fs-sam-01.local".to_string());
+        board_ids.insert(2, "fs-sam-02.local".to_string());
+        board_ids.insert(3, "fs-sam-03.local".to_string());
+        board_ids.insert(4, "fs-sam-04.local".to_string());
         
         Data {
             ip_addresses: HashMap::new(),
             board_ids: board_ids,
             server: None,
             state_num: 0,
-            data_socket: UdpSocket::bind("0.0.0.0:4573").expect("couldn't bind to address"),
         }
     }
 }
@@ -46,7 +44,7 @@ pub enum State {
 impl State {
     pub fn next(self, data: &mut Data) -> State {
 
-        if data.state_num % 100000 == 0 {
+        if data.state_num % 1000000 == 0 {
             println!("{:?} {}", self, data.state_num);
         }
         data.state_num += 1;
@@ -86,7 +84,7 @@ fn connect_to_server(data: &mut Data) -> State {
     match TcpStream::connect(socket_addr) {
         Ok(stream) => {
             data.server = Some(stream);
-            data.server.as_ref().unwrap().set_nonblocking(true).expect("set_nonblocking call failed");
+            data.server.as_ref().unwrap().set_nonblocking(false).expect("set_nonblocking call failed");
             return State::HandleCommands
         },
         Err(_e) => {
@@ -98,66 +96,77 @@ fn connect_to_server(data: &mut Data) -> State {
 fn handle_commands(data: &mut Data) -> State {
 
     // receive command from server
-    let mut buf = vec![];
+    let mut buf = vec![0; 65536];
 
-    match data.server.as_mut().unwrap().read_to_end(&mut buf) {
-        Ok(_) => {
 
-            if buf.len() <= 0 {
-                return State::DeviceDiscovery;
-            } 
+    match data.server.as_mut().unwrap().read(&mut buf) {
+        Ok(bytes) => {
 
-            let deserialized: Result<core::Message, Error> = deserialize_from_slice(&buf);
+            
+            println!("\n\n\nreceived {} bytes", bytes);
 
-            let board_id = match deserialized {
-                Ok(message) => match message.content {
-                    core::mod_Message::OneOfcontent::command(command) => {
-                        match command.command {
-                            match get_board_id_from_command(command) {
-                                Some(board_id) => {
-                                    board_id
-                                },
-                                None => {
-                                    return State::DeviceDiscovery
-                                }
+
+            let deserialized: core::Message= deserialize_from_slice(&buf).unwrap();
+
+            println!("{:?}", deserialized);
+
+            if let Some(board_id) = get_board_id_from_command(deserialized) {
+                println!("board_id: {}", board_id);
+                if let Some(hostname) = data.board_ids.get(&board_id) {
+                    println!("hostname: {}", hostname);
+                    if let Some(ip) = data.ip_addresses.get(hostname) {
+                        match ip {
+                            Some(ipv4_addr) => {
+                                let socket_addr = SocketAddr::new(*ipv4_addr, 8378);
+                                let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
+                                socket.connect(socket_addr).expect("connect function failed");
+                                socket.send(&buf[..bytes]).expect("couldn't send message");
+                                println!("Sent command to {}", hostname);
+                                return State::HandleCommands
+                            }
+                            None => {
+                                println!("Could not find {} on local network", hostname);
+                                return State::HandleCommands
                             }
                         }
-                    },
-                    _ => {
-                        return State::DeviceDiscovery
-                    }
-                },
-                _ => {
-                    return State::DeviceDiscovery
-                }
-            };
-        
-
-            // forward to SAM
-            if let Some(ip) = data.ip_addresses.get("sam-01.local") {
-                match ip {
-                    Some(ipv4_addr) => {
-                        let socket_addr = SocketAddr::new(*ipv4_addr, 8378);
-                        let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
-                        socket.connect(socket_addr).expect("connect function failed");
-                        socket.send(&buf).expect("couldn't send message");
+                    } else {
+                        println!("Could not find {} on local network", hostname);
                         return State::HandleCommands
-                    },
-                    None => {
-                        return State::DeviceDiscovery
                     }
+                } else {
+                    println!("Board {} not mapped", board_id);
+                    return State::HandleCommands
                 }
             } else {
-                return State::DeviceDiscovery
+                println!("no board_id");
             }
+
+        
+
+            // // forward to SAM
+            // if let Some(ip) = data.ip_addresses.get("sam-01.local") {
+            //     match ip {
+            //         Some(ipv4_addr) => {
+            //             let socket_addr = SocketAddr::new(*ipv4_addr, 8378);
+            //             let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
+            //             socket.connect(socket_addr).expect("connect function failed");
+            //             socket.send(&buf).expect("couldn't send message");
+            //             return State::HandleCommands
+            //         },
+            //         None => {
+            //             return State::DeviceDiscovery
+            //         }
+            //     }
+            // } else {
+            //     return State::DeviceDiscovery
+            // }
+            return State::HandleCommands
         },
         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-            // no new data
             return State::HandleCommands
         }
         Err(_e) => {
-            // Connection to server lost
-            return State::DeviceDiscovery
+            return State::HandleCommands
         }
     };
 
@@ -165,13 +174,20 @@ fn handle_commands(data: &mut Data) -> State {
 
 
 
-fn get_board_id_from_command(command: command::Command) -> Option<u32> {
-    match command.command {
-        command::mod_Command::OneOfcommand::set_led(set_led) => {
-            return set_led.led.unwrap().board_id?;
-        },
-        command::mod_Command::OneOfcommand::click_valve(click_valve) => {
-            return click_valve.valve.unwrap().board_id?;
+fn get_board_id_from_command(message: core::Message) -> Option<u32> {
+    match message.content {
+        core::mod_Message::OneOfcontent::command(command) => {
+            match command.command {
+                command::mod_Command::OneOfcommand::set_led(set_led) => {
+                    return Some(set_led.led.unwrap().board_id);
+                },
+                command::mod_Command::OneOfcommand::click_valve(click_valve) => {
+                    return Some(click_valve.valve.unwrap().board_id);
+                },
+                _ => {
+                    return None
+                }
+            }
         },
         _ => {
             return None
