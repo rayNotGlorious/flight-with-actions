@@ -1,4 +1,4 @@
-use crate::unit::Duration;
+use crate::sequences::unit::Duration;
 use pyo3::{PyAny, PyRef, PyResult, pyfunction};
 use std::{thread, time::{self, Instant}};
 

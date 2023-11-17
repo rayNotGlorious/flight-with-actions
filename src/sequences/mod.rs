@@ -25,10 +25,11 @@ fn libseq(python: Python<'_>, module: &PyModule) -> PyResult<()> {
 	Ok(())
 }
 
-fn main() {
-	println!("Hello, world!");
-
+pub fn run_python_sequence(string: &String) {
+	pyo3::append_to_inittab!(libseq);
+	// pyo3::append_to_inittab!(libseq::unit);
 	Python::with_gil(|python| {
-		PyModule::from_code
+		let result = PyModule::from_code(python, "import libseq; unit = libseq.Unit(5); print(5)", "", "");
+		println!("{:?}", result)
 	});
 }

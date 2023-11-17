@@ -2,7 +2,7 @@ use std::{sync::Arc, collections::HashMap};
 
 use pyo3::{pyclass, pymethods};
 
-use crate::unit::Unit;
+use crate::sequences::unit::Unit;
 
 #[pyclass(subclass)]
 #[derive(Clone, Debug)]
@@ -13,12 +13,7 @@ pub struct Sensor {
 
 #[pymethods]
 impl Sensor {
-	#[new]
-	pub fn new(name: String, sensor_map: Arc<HashMap<String, f64>>) -> Self {
-		Sensor { name, sensor_map }
-	}
-
-	pub fn read(&self) -> Unit {
+	pub fn read(&self) {
 
 	}
 }
