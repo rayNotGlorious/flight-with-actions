@@ -1,22 +1,26 @@
 use std::net::{SocketAddr, UdpSocket, Ipv4Addr, IpAddr};
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
+
+use crate::state::State;
 
 // let sys_time = SystemTime::now();
 
 pub struct DataReceiver {
-    pub data_socket: UdpSocket,
-    pub time: SystemTime,
+    data_socket: UdpSocket,
+    time: SystemTime,
+    state: Arc<RwLock<State>>
 }
 
 impl DataReceiver {
-    pub fn new() -> DataReceiver {
+    pub fn new(state: Arc<RwLock<State>>) -> DataReceiver {
         let data_socket =
             UdpSocket::bind("0.0.0.0:4573").expect("Couldn't bind data_socket to address");
         data_socket
             .set_nonblocking(false)
             .expect("Couldn't set data socket to be non-blocking");
         let time = SystemTime::now();
-        DataReceiver { data_socket, time }
+        DataReceiver { data_socket, time, state }
     }
 
     pub fn receive(&mut self) -> Result<(usize, SocketAddr), std::io::Error> {
