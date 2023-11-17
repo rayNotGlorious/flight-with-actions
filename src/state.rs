@@ -37,3 +37,17 @@ pub struct State {
     pub sensor_data: HashMap<String, f64>,
     pub channel_mapping: HashMap<ChannelIdentifier, String>
 }
+
+impl State {
+    pub fn new() -> State {
+        State {
+            sensor_data: HashMap::new(),
+            channel_mapping: HashMap::new(),
+        }
+    }
+
+    pub fn get_sensor_data(&self, sensor_name: &str) -> Option<&f64> {
+        self.sensor_data.get(sensor_name)
+    }
+
+}

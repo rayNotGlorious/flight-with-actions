@@ -110,37 +110,19 @@ fn handle_commands(data: &mut Data) -> State {
 
             println!("{:?}", deserialized);
 
-            if let Some(board_id) = get_board_id_from_command(deserialized) {
-                println!("board_id: {}", board_id);
-                if let Some(hostname) = data.board_ids.get(&board_id) {
-                    println!("hostname: {}", hostname);
-                    if let Some(ip) = data.ip_addresses.get(hostname) {
-                        match ip {
-                            Some(ipv4_addr) => {
-                                let socket_addr = SocketAddr::new(*ipv4_addr, 8378);
-                                let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
-                                socket.connect(socket_addr).expect("connect function failed");
-                                socket.send(&buf[..bytes]).expect("couldn't send message");
-                                println!("Sent command to {}", hostname);
-                                return State::HandleCommands
-                            }
-                            None => {
-                                println!("Could not find {} on local network", hostname);
-                                return State::HandleCommands
-                            }
-                        }
-                    } else {
-                        println!("Could not find {} on local network", hostname);
-                        return State::HandleCommands
-                    }
-                } else {
-                    println!("Board {} not mapped", board_id);
+            match deserialized.content {
+                core::mod_Message::OneOfcontent::command(command) => {
+                    handle_command(data, command)
+                },
+                core::mod_Message::OneOfcontent::mapping(mapping) => {
+                    update_mapping(data, mapping);
+                    return State::HandleCommands
+                },
+                _ => {
                     return State::HandleCommands
                 }
-            } else {
-                println!("no board_id");
             }
-            return State::HandleCommands
+            
         },
         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
             return State::HandleCommands
@@ -149,28 +131,56 @@ fn handle_commands(data: &mut Data) -> State {
             return State::HandleCommands
         }
     };
+    return State::HandleCommands
 
 }
 
 
 
-fn get_board_id_from_command(message: core::Message) -> Option<u32> {
-    match message.content {
-        core::mod_Message::OneOfcontent::command(command) => {
-            match command.command {
-                command::mod_Command::OneOfcommand::set_led(set_led) => {
-                    return Some(set_led.led.unwrap().board_id);
-                },
-                command::mod_Command::OneOfcommand::click_valve(click_valve) => {
-                    return Some(click_valve.valve.unwrap().board_id);
-                },
-                _ => {
-                    return None
-                }
-            }
+fn get_board_id_from_command(command: command::Command) -> Option<u32> {
+    match command.command {
+        command::mod_Command::OneOfcommand::set_led(set_led) => {
+            return Some(set_led.led.unwrap().board_id);
+        },
+        command::mod_Command::OneOfcommand::click_valve(click_valve) => {
+            return Some(click_valve.valve.unwrap().board_id);
         },
         _ => {
             return None
         }
     }
+}
+
+fn handle_command(data: &mut Data, command: command::Command) -> State {
+    if let Some(board_id) = get_board_id_from_command(command) {
+        println!("board_id: {}", board_id);
+        if let Some(hostname) = data.board_ids.get(&board_id) {
+            println!("hostname: {}", hostname);
+            if let Some(ip) = data.ip_addresses.get(hostname) {
+                match ip {
+                    Some(ipv4_addr) => {
+                        let socket_addr = SocketAddr::new(*ipv4_addr, 8378);
+                        let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
+                        socket.connect(socket_addr).expect("connect function failed");
+                        socket.send(&buf[..bytes]).expect("couldn't send message");
+                        println!("Sent command to {}", hostname);
+                        return State::HandleCommands
+                    }
+                    None => {
+                        println!("Could not find {} on local network", hostname);
+                        return State::HandleCommands
+                    }
+                }
+            } else {
+                println!("Could not find {} on local network", hostname);
+                return State::HandleCommands
+            }
+        } else {
+            println!("Board {} not mapped", board_id);
+            return State::HandleCommands
+        }
+    } else {
+        println!("no board_id");
+    }
+    return State::HandleCommands
 }
