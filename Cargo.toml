@@ -14,3 +14,4 @@ quick-protobuf = "0.8.0"
 tokio = { version = "1.23" }
 dns-lookup = "2.0.2"
 fs-protobuf-rust = { git = "ssh://git@github-research.gatech.edu/YJSP/fs-protobuf-rust" }
+lazy_static = "1.4.0"

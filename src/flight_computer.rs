@@ -1,18 +1,17 @@
 use std::{collections::HashMap, net::{IpAddr, SocketAddr, UdpSocket}, io::{Read, self}, sync::{Arc, RwLock}};
 use quick_protobuf::{deserialize_from_slice, Error};
 
-use crate::{discovery::get_ips, state::State, sequences::run_python_sequence};
+use crate::{discovery::get_ips, state, sequences::run_python_sequence};
 use std::net::TcpStream;
 
 use fs_protobuf_rust::compiled::mcfs::{core, command};
 
 
-const SERVER_ADDR: &str = "192.168.0.176";
+const SERVER_ADDR: &str = "192.168.0.156";
 const HOSTNAMES: [&str; 3] = [SERVER_ADDR, "fs-sam-01.local", "fs-sam-02.local"];
 
 pub struct FlightComputer {
-    ip_addresses: HashMap<String, Option<IpAddr>>,
-    state: Arc<RwLock<State>>,
+    ip_addresses: HashMap<String, IpAddr>,
     board_ids: HashMap<u32, String>,
     server: Option<TcpStream>,
     fc_state: FCState,
@@ -21,16 +20,15 @@ pub struct FlightComputer {
 }
 
 impl FlightComputer {
-    pub fn new(state: Arc<RwLock<State>>) -> FlightComputer {
+    pub fn new() -> FlightComputer {
         let mut board_ids = HashMap::new();
-        board_ids.insert(1, "fs-sam-01.local".to_string());
-        board_ids.insert(2, "fs-sam-02.local".to_string());
-        board_ids.insert(3, "fs-sam-03.local".to_string());
-        board_ids.insert(4, "fs-sam-04.local".to_string());
+        board_ids.insert(1, "sam-01.local".to_string());
+        board_ids.insert(2, "sam-02.local".to_string());
+        board_ids.insert(3, "sam-03.local".to_string());
+        board_ids.insert(4, "sam-04.local".to_string());
         
         FlightComputer {
             ip_addresses: HashMap::new(),
-            state: state,
             board_ids,
             server: None,
             fc_state: FCState::Init,
@@ -69,28 +67,20 @@ impl FlightComputer {
     }
 
     fn init(&mut self) -> FCState {
-        FCState::RunSequence
+        FCState::DeviceDiscovery
     }
 
     fn device_discovery(&mut self) -> FCState {
         self.ip_addresses = get_ips(&HOSTNAMES);
         if let Some(ip) = self.ip_addresses.get(SERVER_ADDR) {
-            match ip {
-                Some(_ipv4_addr) => {
-                    FCState::ConnectToServer
-                },
-                None => {
-                    FCState::DeviceDiscovery
-                }
-            }
-        } else {
-            FCState::DeviceDiscovery
+            return FCState::ConnectToServer
         }
+        FCState::DeviceDiscovery
     }
 
     fn connect_to_server(&mut self) -> FCState {
-        let server_addr = self.ip_addresses.get(SERVER_ADDR).unwrap().unwrap();
-        let socket_addr = SocketAddr::new(server_addr, 5025);
+        let server_addr = self.ip_addresses.get(SERVER_ADDR).unwrap();
+        let socket_addr = SocketAddr::new(*server_addr, 5025);
         match TcpStream::connect(socket_addr) {
             Ok(stream) => {
                 self.server = Some(stream);
@@ -118,12 +108,12 @@ impl FlightComputer {
                     },
                     core::mod_Message::OneOfcontent::mapping(mapping) => {
                         println!("mapping: {:?}", mapping);
-                        self.state.write().unwrap().set_mappings(mapping);
+                        state::set_mappings(mapping);
                     },
                     core::mod_Message::OneOfcontent::sequence(sequence) => {
                         println!("sequence: {:?}", sequence);
                         self.sequence = sequence.script.to_string();
-                        return FCState::HandleCommands
+                        return FCState::RunSequence
                     },
                     _ => {
                         return FCState::HandleCommands
@@ -143,8 +133,7 @@ impl FlightComputer {
 
     fn run_sequence(&mut self) -> FCState {
         run_python_sequence(&self.sequence);
-        println!("running sequence: {}", self.sequence);
-        FCState::DeviceDiscovery
+        FCState::HandleCommands
     }
 
     fn handle_command(&mut self, command: command::Command, buf: &[u8], bytes: usize) {
@@ -153,18 +142,11 @@ impl FlightComputer {
             if let Some(hostname) = self.board_ids.get(&board_id) {
                 println!("hostname: {}", hostname);
                 if let Some(ip) = self.ip_addresses.get(hostname) {
-                    match ip {
-                        Some(ipv4_addr) => {
-                            let socket_addr = SocketAddr::new(*ipv4_addr, 8378);
-                            let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
-                            socket.connect(socket_addr).expect("connect function failed");
-                            socket.send(&buf[..bytes]).expect("couldn't send message");
-                            println!("Sent command to {}", hostname);
-                        }
-                        None => {
-                            println!("Could not find {} on local network", hostname);
-                        }
-                    }
+                    let socket_addr = SocketAddr::new(*ip, 8378);
+                    let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
+                    socket.connect(socket_addr).expect("connect function failed");
+                    socket.send(&buf[..bytes]).expect("couldn't send message");
+                    println!("Sent command to {}", hostname);
                 } else {
                     println!("Could not find {} on local network", hostname);
                 }
