@@ -1,11 +1,20 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-pub fn get_ips(hostnames: &[&str]) -> HashMap<String, Option<IpAddr>> {
-    let mut ips: HashMap<String, Option<IpAddr>> = HashMap::new();
+pub fn get_ips(hostnames: &[&str]) -> HashMap<String, IpAddr> {
+    let mut ips: HashMap<String, IpAddr> = HashMap::new();
     for hostname in hostnames {
-        let ip = dns_lookup::lookup_host(hostname);
-        ips.insert(hostname.to_string(), ip.ok().and_then(|ip| ip.get(0).copied()));
+        match dns_lookup::lookup_host(hostname) {
+            Ok(ip) => {
+                // println!("{}: {:?}", hostname, ip);
+                if let Some(ip) = ip.get(0) {
+                    ips.insert(hostname.to_string(), ip.clone());
+                }
+            }
+            Err(e) => {
+                // println!("{}: {:?}", hostname, e);
+            }
+        }
     }
     ips
 }
