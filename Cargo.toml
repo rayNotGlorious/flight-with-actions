@@ -1,13 +1,12 @@
 [package]
 name = "fc"
 version = "0.1.0"
-authors = ["debian"]
 edition = "2018"
 
 [dependencies]
 serde_json = "1.0"
 prusst = "1.0"
-pyo3 = { version = "0.20.0", features = ["auto-initialize"]}
+pyo3 = { version = "0.20.0", features = ["auto-initialize"] }
 udp-socket = "0.1.5"
 tcp-stream = "0.24.4"
 quick-protobuf = "0.8.0"
@@ -18,3 +17,5 @@ lazy_static = "1.4.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tracing-appender = "0.2.3"
+common = { git = "ssh://git@github-research.gatech.edu/YJSP/common" }
+postcard = { version = "1.0.8", features = ["alloc"] }
