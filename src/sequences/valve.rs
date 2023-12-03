@@ -4,6 +4,7 @@ use std::net::{SocketAddr, UdpSocket};
 use fs_protobuf_rust::compiled::mcfs::{core, command, board};
 use pyo3::{pyclass, pymethods};
 use quick_protobuf::serialize_into_vec;
+use tracing::debug;
 use crate::state;
 
 #[pyclass]
@@ -39,15 +40,15 @@ impl Valve {
 					let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
                     socket.connect(socket_addr).expect("connect function failed");
                     socket.send(&message_serialized).expect("couldn't send message");
-					println!("Opening valve {} on board {} at {}", self.name, hostname, ipv4_addr);
+					debug!("Opening valve {} on board {} at {}", self.name, hostname, ipv4_addr);
 				} else {
-					println!("No ip for hostname {} found", hostname);
+					debug!("No ip for hostname {} found", hostname);
 				}
 			} else {
-				println!("No board with id {} found", valve.board_id);
+				debug!("No board with id {} found", valve.board_id);
 			}
 		} else {
-			println!("Mapping for valve {} not found", self.name)
+			debug!("Mapping for valve {} not found", self.name)
 		}
 	}
 
@@ -71,15 +72,15 @@ impl Valve {
 					let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
                     socket.connect(socket_addr).expect("connect function failed");
                     socket.send(&message_serialized).expect("couldn't send message");
-					println!("Closing valve {} on board {} at {}", self.name, hostname, ipv4_addr);
+					debug!("Closing valve {} on board {} at {}", self.name, hostname, ipv4_addr);
 				} else {
-					println!("No ip for hostname {} found", hostname);
+					debug!("No ip for hostname {} found", hostname);
 				}
 			} else {
-				println!("No board with id {} found", valve.board_id);
+				debug!("No board with id {} found", valve.board_id);
 			}
 		} else {
-			println!("Mapping for valve {} not found", self.name)
+			debug!("Mapping for valve {} not found", self.name)
 		}
 	}
 

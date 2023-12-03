@@ -1,5 +1,5 @@
 use pyo3::{Python, PyResult, types::PyModule, pymodule, wrap_pyfunction, Py};
-use crate::state;
+use tracing::debug;
 
 pub mod func;
 pub mod sensor;
@@ -67,6 +67,6 @@ pub fn run_python_sequence(string: &String) {
 	Python::with_gil(|python| {
 		// python.run("from libseq import *", None, None).unwrap();
 		let result = PyModule::from_code(python, string, "", "");
-		println!("Sequence terminated with status {:?}", result)
+		debug!("Sequence completed with result: {:?}", result);
 	});
 }
