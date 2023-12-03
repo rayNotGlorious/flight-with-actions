@@ -1,9 +1,9 @@
-use std::net::{SocketAddr, UdpSocket, Ipv4Addr, IpAddr};
-use std::sync::{Arc, RwLock};
+use std::net::{SocketAddr, UdpSocket};
 use std::time::SystemTime;
-use fs_protobuf_rust::compiled::mcfs::{core, board, mapping, data};
+use fs_protobuf_rust::compiled::mcfs::core;
 
 use quick_protobuf::deserialize_from_slice;
+use tracing::{trace, debug};
 
 use crate::state;
 
@@ -32,6 +32,8 @@ impl DataReceiver {
         self.time = SystemTime::now();
 
         let deserialized: core::Message= deserialize_from_slice(&buf).unwrap();
+        debug!("Received message from {}: {:?}", src, deserialized);
+        // println!("Received message from {}: {:?}", src, deserialized);
         match deserialized.content {
             core::mod_Message::OneOfcontent::data(data) => {
                 state::insert_sensor_data(data);
@@ -39,9 +41,7 @@ impl DataReceiver {
             _ => {}
         }
 
-        let socket = UdpSocket::bind("0.0.0.0:7202").expect("couldn't bind to address");
-        socket.connect("192.168.0.156:7201").expect("connect function failed");
-        let _ = socket.send(&buf);
+        let _ = self.data_socket.send_to(&buf[..amt], "169.254.99.154:7201");
         Ok((amt, src))
     }
 }

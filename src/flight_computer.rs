@@ -1,5 +1,6 @@
-use std::{collections::HashMap, net::{IpAddr, SocketAddr, UdpSocket}, io::{Read, self}, sync::{Arc, RwLock}};
-use quick_protobuf::{deserialize_from_slice, Error};
+use std::{collections::HashMap, net::{IpAddr, SocketAddr, UdpSocket}, io::{Read, self}};
+use quick_protobuf::deserialize_from_slice;
+use tracing::{debug, error};
 
 use crate::{discovery::get_ips, state, sequences::run_python_sequence};
 use std::net::TcpStream;
@@ -7,8 +8,8 @@ use std::net::TcpStream;
 use fs_protobuf_rust::compiled::mcfs::{core, command};
 
 
-const SERVER_ADDR: &str = "192.168.0.156";
-const HOSTNAMES: [&str; 3] = [SERVER_ADDR, "fs-sam-01.local", "fs-sam-02.local"];
+const SERVER_ADDR: &str = "Jeffs-MacBook-Pro.local";
+const HOSTNAMES: [&str; 3] = [SERVER_ADDR, "sam-01.local", "sam-02.local"];
 
 pub struct FlightComputer {
     ip_addresses: HashMap<String, IpAddr>,
@@ -38,6 +39,7 @@ impl FlightComputer {
     }
 
     pub fn run(&mut self) {
+        debug!("Starting flight computer");
         loop {
 
             if self.fc_state_num % 1000000 == 0 {
@@ -85,6 +87,7 @@ impl FlightComputer {
             Ok(stream) => {
                 self.server = Some(stream);
                 self.server.as_ref().unwrap().set_nonblocking(false).expect("set_nonblocking call failed");
+                debug!("Connected to server");
                 FCState::HandleCommands
             },
             Err(_e) => {
@@ -99,19 +102,21 @@ impl FlightComputer {
 
         match self.server.as_mut().unwrap().read(&mut buf) {
             Ok(bytes) => {
-                println!("\n\n\nreceived {} bytes", bytes);
+                // println!("\n\n\nreceived {} bytes", bytes);
                 let deserialized: core::Message= deserialize_from_slice(&buf).unwrap();
-                println!("{:?}", deserialized);
+                // debug!("{:?}", deserialized);
                 match deserialized.content {
                     core::mod_Message::OneOfcontent::command(command) => {
+                        debug!("command: {:?}", command);
                         self.handle_command(command, &buf, bytes);
                     },
                     core::mod_Message::OneOfcontent::mapping(mapping) => {
-                        println!("mapping: {:?}", mapping);
+                        debug!("mapping: {:?}", mapping);
+                        // println!("mapping: {:?}", mapping);
                         state::set_mappings(mapping);
                     },
                     core::mod_Message::OneOfcontent::sequence(sequence) => {
-                        println!("sequence: {:?}", sequence);
+                        debug!("sequence: {:?}", sequence);
                         self.sequence = sequence.script.to_string();
                         return FCState::RunSequence
                     },
@@ -138,23 +143,23 @@ impl FlightComputer {
 
     fn handle_command(&mut self, command: command::Command, buf: &[u8], bytes: usize) {
         if let Some(board_id) = get_board_id_from_command(command) {
-            println!("board_id: {}", board_id);
+            // println!("board_id: {}", board_id);
             if let Some(hostname) = self.board_ids.get(&board_id) {
-                println!("hostname: {}", hostname);
+                // println!("hostname: {}", hostname);
                 if let Some(ip) = self.ip_addresses.get(hostname) {
                     let socket_addr = SocketAddr::new(*ip, 8378);
                     let socket = UdpSocket::bind("0.0.0.0:9572").expect("couldn't bind to address");
                     socket.connect(socket_addr).expect("connect function failed");
                     socket.send(&buf[..bytes]).expect("couldn't send message");
-                    println!("Sent command to {}", hostname);
+                    debug!("Sent command to {}", hostname);
                 } else {
-                    println!("Could not find {} on local network", hostname);
+                    error!("Could not find {} on local network", hostname);
                 }
             } else {
-                println!("Board {} not mapped", board_id);
+                error!("Board {} not mapped", board_id);
             }
         } else {
-            println!("no board_id");
+            error!("no board_id");
         }
     }
 }
