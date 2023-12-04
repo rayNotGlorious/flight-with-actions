@@ -14,6 +14,11 @@ pub struct Sensor {
 
 #[pymethods]
 impl Sensor {
+	#[new]
+	pub fn new(name: String) -> Self {
+		Sensor { name }
+	}
+
 	pub fn read(&self) -> f64 {
 		if let Some(value) = state::read_sensor(&self.name) {
 			return value;

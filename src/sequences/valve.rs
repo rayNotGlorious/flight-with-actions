@@ -24,6 +24,7 @@ impl Valve {
 		if let Some(valve) = state::get_valve(&self.name) {
 			if let Some(hostname) = state::get_hostname_from_id(valve.board_id) {
 				if let Some(ipv4_addr) = state::get_ip_from_hostname(&hostname) {
+					state::open_valve(self.name.as_str());
 					let command = command::Command {
 						command: command::mod_Command::OneOfcommand::click_valve(
 							command::ClickValve { 
@@ -56,6 +57,7 @@ impl Valve {
 		if let Some(valve) = state::get_valve(&self.name) {
 			if let Some(hostname) = state::get_hostname_from_id(valve.board_id) {
 				if let Some(ipv4_addr) = state::get_ip_from_hostname(&hostname) {
+					state::close_valve(self.name.as_str());
 					let command = command::Command {
 						command: command::mod_Command::OneOfcommand::click_valve(
 							command::ClickValve { 

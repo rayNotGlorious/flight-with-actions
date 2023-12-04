@@ -1,7 +1,8 @@
 use fs_protobuf_rust::compiled::mcfs::{board, mapping, data};
-use std::{collections::HashMap, sync::{Arc, RwLock}, net::IpAddr};
+use std::{collections::HashMap, sync::{Arc, RwLock}, net::IpAddr, alloc::System, time::SystemTime};
 use lazy_static::lazy_static;
 use crate::discovery::get_ips;
+use common::VehicleState;
 
 lazy_static! {
     static ref STATE: Arc<RwLock<State>> = Arc::new(RwLock::new(State::new()));
@@ -11,6 +12,11 @@ pub fn get_state() -> Arc<RwLock<State>> {
     STATE.clone()
 }
 
+pub fn get_vehicle_state() -> VehicleState {
+    let state = STATE.read().unwrap();
+    state.vehicle_state.clone()
+}
+
 pub fn read_sensor(sensor_name: &str) -> Option<f64> {
     let state = STATE.read().unwrap();
     if let Some(sensor_data) = state.read_sensor(sensor_name) {
@@ -18,6 +24,16 @@ pub fn read_sensor(sensor_name: &str) -> Option<f64> {
     } else {
         None
     }
+}
+
+pub fn open_valve(valve: &str) {
+    let mut state = STATE.write().unwrap();
+    state.vehicle_state.valve_states.insert(valve.to_string(), common::ValveState::Open);
+}
+
+pub fn close_valve(valve: &str) {
+    let mut state = STATE.write().unwrap();
+    state.vehicle_state.valve_states.insert(valve.to_string(), common::ValveState::Closed);
 }
 
 pub fn get_valve(valve: &str) -> Option<board::ChannelIdentifier> {
@@ -71,6 +87,9 @@ pub struct State {
     pub valve_mapping: HashMap<String, board::ChannelIdentifier>,
     pub ip_addresses: HashMap<String, IpAddr>,
     pub board_ids: HashMap<u32, String>,
+    pub vehicle_state: VehicleState,
+    pub start_time: SystemTime,
+
 }
 
 impl State {
@@ -93,6 +112,8 @@ impl State {
             valve_mapping: HashMap::new(),
             ip_addresses: ip_addresses,
             board_ids: board_ids,
+            vehicle_state: VehicleState::new(),
+            start_time: SystemTime::now(),
         }
     }
 
@@ -102,6 +123,7 @@ impl State {
 
     pub fn set_mappings(&mut self, mapping: mapping::Mapping) {
         self.channel_mapping.clear();
+        self.vehicle_state = VehicleState::new();
         for mapping::ChannelMapping {name, channel_identifier} in mapping.channel_mappings {
             if let Some(channel_identifier) = channel_identifier {
                 match channel_identifier.channel_type {
@@ -123,6 +145,8 @@ impl State {
 
     pub fn insert_data(&mut self, sensor_name: &str, data: f64) {
         self.sensor_data.insert(sensor_name.to_string(), data);
+        self.vehicle_state.sensor_readings.insert(sensor_name.to_string(), common::Unit::Volts(data));
+        self.vehicle_state.update_times.insert(sensor_name.to_string(), SystemTime::now().duration_since(self.start_time).unwrap().as_micros() as f64);
     }
 
     pub fn insert_data_from_channel_identifier(&mut self, channel_identifier: &ChannelIdentifier, data: f64) {
