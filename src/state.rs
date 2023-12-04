@@ -26,6 +26,16 @@ pub fn read_sensor(sensor_name: &str) -> Option<f64> {
     }
 }
 
+pub fn open_valve(valve: &str) {
+    let mut state = STATE.write().unwrap();
+    state.vehicle_state.valve_states.insert(valve.to_string(), common::ValveState::Open);
+}
+
+pub fn close_valve(valve: &str) {
+    let mut state = STATE.write().unwrap();
+    state.vehicle_state.valve_states.insert(valve.to_string(), common::ValveState::Closed);
+}
+
 pub fn get_valve(valve: &str) -> Option<board::ChannelIdentifier> {
     let state = STATE.read().unwrap();
     if let Some(valve) = state.valve_mapping.get(valve) {
@@ -113,6 +123,7 @@ impl State {
 
     pub fn set_mappings(&mut self, mapping: mapping::Mapping) {
         self.channel_mapping.clear();
+        self.vehicle_state = VehicleState::new();
         for mapping::ChannelMapping {name, channel_identifier} in mapping.channel_mappings {
             if let Some(channel_identifier) = channel_identifier {
                 match channel_identifier.channel_type {
