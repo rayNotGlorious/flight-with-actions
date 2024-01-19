@@ -1,4 +1,5 @@
-use fs_protobuf_rust::compiled::mcfs::{board, mapping, data};
+use postcard::{to_vec, from_bytes};
+use postcard::{from_bytes, to_vec};
 use std::{collections::HashMap, sync::{Arc, RwLock}, net::IpAddr, alloc::System, time::SystemTime};
 use lazy_static::lazy_static;
 use crate::discovery::get_ips;
