@@ -1,11 +1,8 @@
-use std::{collections::HashMap, net::{IpAddr, SocketAddr, UdpSocket}, io::{Read, self}};
-use quick_protobuf::deserialize_from_slice;
+use std::{collections::HashMap, net::{IpAddr, SocketAddr, UdpSocket, TcpStream}, io::{Read, self}};
+use postcard::{from_bytes, to_vec};
 use tracing::{debug, error};
 
 use crate::{discovery::get_ips, state, sequences::run_python_sequence};
-use std::net::TcpStream;
-
-use fs_protobuf_rust::compiled::mcfs::{core, command};
 
 
 const SERVER_ADDR: &str = "Jeffs-MacBook-Pro.local";
@@ -103,7 +100,7 @@ impl FlightComputer {
         match self.server.as_mut().unwrap().read(&mut buf) {
             Ok(bytes) => {
                 // println!("\n\n\nreceived {} bytes", bytes);
-                let deserialized: core::Message= deserialize_from_slice(&buf).unwrap();
+                let deserialized: core::Message = from_bytes(&buf).expect("Deserialization failed");
                 // debug!("{:?}", deserialized);
                 match deserialized.content {
                     core::mod_Message::OneOfcontent::command(command) => {
