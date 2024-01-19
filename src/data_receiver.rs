@@ -1,8 +1,6 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::SystemTime;
-use fs_protobuf_rust::compiled::mcfs::core;
-
-use quick_protobuf::deserialize_from_slice;
+use postcard::{from_bytes, to_vec};
 use tracing::{trace, debug};
 
 use crate::state;
@@ -31,7 +29,7 @@ impl DataReceiver {
         // println!("Received {} bytes from {} with delay {}", amt, src, self.time.elapsed().unwrap().as_millis());
         self.time = SystemTime::now();
 
-        let deserialized: core::Message= deserialize_from_slice(&buf).unwrap();
+        let deserialized: core::Message = from_bytes(&buf).expect("Deserialization failed");
         debug!("Received message from {}: {:?}", src, deserialized);
         // println!("Received message from {}: {:?}", src, deserialized);
         match deserialized.content {
