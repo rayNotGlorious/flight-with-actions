@@ -1,9 +1,8 @@
 use std::net::{SocketAddr, UdpSocket};
 
 // use fc::sequences::valve;
-use fs_protobuf_rust::compiled::mcfs::{core, command, board};
+use postcard::{serialize_into_vec, from_bytes};
 use pyo3::{pyclass, pymethods};
-use quick_protobuf::serialize_into_vec;
 use tracing::debug;
 use crate::state;
 
