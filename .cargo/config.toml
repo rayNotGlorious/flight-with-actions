@@ -1,8 +1,2 @@
-# [net]
-# git-fetch-with-cli = true
-
-# [target.armv7-unknown-linux-gnueabihf]
-# linker = "arm-linux-gnueabihf-gcc"
-
-# [build]
-# target = "armv7-unknown-linux-gnueabihf"
+[net]
+git-fetch-with-cli = true
