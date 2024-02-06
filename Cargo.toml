@@ -1,21 +1,10 @@
 [package]
-name = "fc"
+name = "flight"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-serde_json = "1.0"
-prusst = "1.0"
-pyo3 = { version = "0.20.0", features = ["auto-initialize"] }
-udp-socket = "0.1.5"
-tcp-stream = "0.24.4"
-quick-protobuf = "0.8.0"
-tokio = { version = "1.23" }
-dns-lookup = "2.0.2"
-fs-protobuf-rust = { git = "ssh://git@github-research.gatech.edu/YJSP/fs-protobuf-rust" }
-lazy_static = "1.4.0"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-tracing-appender = "0.2.3"
-common = { git = "ssh://git@github-research.gatech.edu/YJSP/common" }
+common = { git = "ssh://git@github-research.gatech.edu/YJSP/common", features = ["sequences"] }
+dns-lookup = "2.0.4"
+jeflog = "0.1.0"
 postcard = { version = "1.0.8", features = ["alloc"] }
