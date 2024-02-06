@@ -1,7 +1,6 @@
+use crate::state::SharedState;
 use jeflog::fail;
 use std::{net::UdpSocket, thread, time::Duration};
-
-use crate::SharedState;
 
 pub fn forward_vehicle_state(shared: &SharedState) -> impl Fn() -> () {
 	let server_address = shared.server_address.clone();

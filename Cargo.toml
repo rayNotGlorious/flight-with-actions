@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-common = { path = "/Users/jeffreyshelton/Dev/common", features = ["sequences"] }
+common = { git = "ssh://git@github-research.gatech.edu/YJSP/common", features = ["sequences"] }
+dns-lookup = "2.0.4"
 jeflog = "0.1.0"
 postcard = { version = "1.0.8", features = ["alloc"] }
