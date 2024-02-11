@@ -1,4 +1,5 @@
-use common::comm::{ChannelDataBurst, DataMessage, Measurement, NodeMapping, Unit, VehicleState};
+use common::comm::{ChannelType, DataMessage, DataPoint, Measurement, NodeMapping, Unit, VehicleState};
+use crate::state::SharedState;
 use jeflog::{fail, pass, warn};
 use std::{
 	collections::HashMap,
@@ -8,8 +9,6 @@ use std::{
 	thread,
 	time::Duration
 };
-
-use crate::state::SharedState;
 
 pub struct Receiver {
 	vehicle_state: Arc<Mutex<VehicleState>>,
@@ -102,7 +101,7 @@ impl Receiver {
 		}
 	}
 
-	fn process_sam_data(&self, socket_map: &Arc<Mutex<HashMap<IpAddr, String>>>, source: SocketAddr, channel_bursts: Vec<ChannelDataBurst>) {
+	fn process_sam_data(&self, socket_map: &Arc<Mutex<HashMap<IpAddr, String>>>, source: SocketAddr, data_points: Vec<DataPoint>) {
 		let socket_map = socket_map
 			.lock()
 			.unwrap();
@@ -116,30 +115,34 @@ impl Receiver {
 				.lock()
 				.unwrap();
 
-			for burst in channel_bursts {
-				if let Some(last_point) = burst.data_points.last() {
-					let mapping = mappings
-						.iter()
-						.find(|mapping| {
-							burst.channel == mapping.channel && burst.channel_type == mapping.channel_type && *board_id == mapping.board_id
-						});
+			for data_point in data_points {
+				let mapping = mappings
+					.iter()
+					.find(|mapping| {
+						data_point.channel == mapping.channel
+						&& data_point.channel_type == mapping.channel_type
+						&& *board_id == mapping.board_id
+					});
 
-					if let Some(mapping) = mapping {
-						let measurement = Measurement {
-							value: last_point.value,
-							unit: Unit::Volts,
-						};
+				if let Some(mapping) = mapping {
+					let mut unit = mapping.channel_type.unit();
+					let mut value = data_point.value;
 
-						vehicle_state.sensor_readings.insert(mapping.text_id.clone(), measurement);
-					} else {
-						warn!("Received a data message from board {board_id}, channel {} ({:?}) with no corresponding mapping.", burst.channel, burst.channel_type);
+					// apply scale factor + calibration offset for PT
+					// if supplied by the mapping
+					if mapping.channel_type == ChannelType::Pt {
+						if let (Some(scale), Some(offset)) = (mapping.scale, mapping.offset) {
+							value = value * scale + offset;
+						} else {
+							unit = Unit::Volts;
+						}
 					}
-				} else {
-					warn!("Received a data message from board {board_id}, channel {} ({:?}) with no data points.", burst.channel, burst.channel_type);
+
+					vehicle_state.sensor_readings.insert(mapping.text_id.clone(), Measurement { value, unit });
 				}
 			}
 		} else {
-			warn!("Received data message from unknown board at {source}: {}.", channel_bursts[0].data_points[0].value);
+			warn!("Received data message from unknown board at \x1b[1m{source}\x1b[0m.");
 		}
 
 		// TODO: push channel bursts into log file.
