@@ -84,6 +84,7 @@ fn server_discovery(shared: SharedState) -> ProgramState {
 			pass!("Successfully connected to \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
 			pass!("Found control server at \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
 
+			*shared.server_address.lock().unwrap() = Some(stream.peer_addr().unwrap().ip());
 			thread::spawn(forwarder::forward_vehicle_state(&shared));
 
 			return ProgramState::WaitForOperator { server_socket: stream, shared };
