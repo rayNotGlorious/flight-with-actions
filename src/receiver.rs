@@ -43,7 +43,7 @@ impl Receiver {
 						}
 
 						match postcard::from_bytes::<DataMessage>(&buffer[..size]) {
-							Ok(DataMessage::Sam(channel_bursts)) => self.process_sam_data(&socket_map, source, channel_bursts),
+							Ok(DataMessage::Sam(data_points)) => self.process_sam_data(&socket_map, source, data_points.into_owned()),
 							Ok(DataMessage::Bms) => self.process_bms_data(),
 							Err(error) => {
 								warn!("Failed to deserialize data message: {}.", error.to_string());
@@ -128,11 +128,18 @@ impl Receiver {
 					let mut unit = mapping.channel_type.unit();
 					let mut value = data_point.value;
 
-					// apply scale factor + calibration offset for PT
-					// if supplied by the mapping
-					if mapping.channel_type == ChannelType::Pt {
-						if let (Some(scale), Some(offset)) = (mapping.scale, mapping.offset) {
-							value = value * scale + offset;
+					// apply linear transformations to current loop and differential signal channels
+					// if the max and min are supplied by the mappings. otherwise, default back to volts.
+					if mapping.channel_type == ChannelType::CurrentLoop {
+						if let (Some(max), Some(min)) = (mapping.max, mapping.min) {
+							// formula for converting voltage into psi for our PTs
+							value = (value - 0.8) / 3.2 * (max - min) + min - mapping.calibrated_offset;
+						} else {
+							unit = Unit::Volts;
+						}
+					} else if mapping.channel_type == ChannelType::DifferentialSignal {
+						if let (Some(_max), Some(_min)) = (mapping.max, mapping.min) {
+							// TODO: implement formula for converting voltage into value for differential signal devices (typically load cells)
 						} else {
 							unit = Unit::Volts;
 						}
