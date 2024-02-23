@@ -2,7 +2,7 @@ use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
 use jeflog::{task, pass, warn, fail};
 use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread, collections::HashMap};
 
-use crate::{forwarder, receiver::Receiver, SERVO_PORT};
+use crate::{forwarder, receiver, SERVO_PORT};
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
 /// 
@@ -15,7 +15,7 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub write_streams: Arc<Mutex<HashMap<BoardId, Option<TcpStream>>>>
+	pub write_streams: Arc<Mutex<HashMap<BoardId, TcpStream>>>
 }
 
 #[derive(Debug)]
@@ -52,6 +52,8 @@ impl ProgramState {
 	}
 }
 
+const BIND_ADDRESS: &str = "0.0.0.0:4573";
+
 fn init() -> ProgramState {
 	let shared = SharedState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
@@ -62,18 +64,10 @@ fn init() -> ProgramState {
 
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
 
-	let receiver = Receiver::new(&shared);
+	thread::spawn(receiver::start_switchboard(BIND_ADDRESS, &shared)
+	.expect(&format!("Cannot create bind on port {BIND_ADDRESS}")));
 
-	match receiver.receive_data() {
-		Ok(closure) => {
-			thread::spawn(closure);
-			ProgramState::ServerDiscovery { shared }
-		},
-		Err(error) => {
-			fail!("Failed to create data forwarding closure: {error}");
-			ProgramState::Init
-		},
-	}
+	ProgramState::ServerDiscovery { shared }
 }
 
 fn server_discovery(shared: SharedState) -> ProgramState {
