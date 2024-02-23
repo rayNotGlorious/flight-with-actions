@@ -46,8 +46,6 @@ pub fn start_switchboard(addr: &str, shared: &SharedState) -> io::Result<impl Fn
 									Ok(DataMessage::Identity(board_id)) => {
 										let mut write_streams = write_streams.lock().unwrap();
 		
-										// supposed to "clone" the current read stream into a write stream
-										// there is no difference between a read and write stream, we just call them that as a convention
 										let write_stream = match stream.try_clone() {
 											Ok(write_stream) => write_stream,
 											Err(_) => {
@@ -55,7 +53,8 @@ pub fn start_switchboard(addr: &str, shared: &SharedState) -> io::Result<impl Fn
 											}
 										};
 										let read_stream = stream;
-										
+
+										// at this point the primary TCP stream has been split between read and write
 										write_streams.insert(board_id.clone(), write_stream);
 										thread::spawn(handle_board(vehicle_state.clone(), mappings.clone(), read_stream, board_id.clone()));
 										
