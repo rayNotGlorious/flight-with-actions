@@ -1,6 +1,6 @@
 use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
 use jeflog::{task, pass, warn, fail};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread};
+use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread, collections::HashMap};
 
 use crate::{forwarder, receiver::Receiver, SERVO_PORT};
 
@@ -8,11 +8,14 @@ use crate::{forwarder, receiver::Receiver, SERVO_PORT};
 /// 
 /// Everything in this struct should be wrapped with `Arc<Mutex<T>>`. **Do not abuse this struct.**
 /// It is intended for what would typically be global state.
+pub type BoardId = String;
+
 #[derive(Debug)]
 pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
+	pub write_streams: Arc<Mutex<HashMap<BoardId, Option<TcpStream>>>>
 }
 
 #[derive(Debug)]
@@ -54,6 +57,7 @@ fn init() -> ProgramState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
 		mappings: Arc::new(Mutex::new(Vec::new())),
 		server_address: Arc::new(Mutex::new(None)),
+		write_streams: Arc::new(Mutex::new(HashMap::new()))
 	};
 
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
