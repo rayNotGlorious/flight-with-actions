@@ -98,7 +98,7 @@ fn server_discovery(shared: SharedState) -> ProgramState {
 }
 
 fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> ProgramState {
-	let mut buffer = vec![0; 1024];
+	let mut buffer = vec![0; 1_000_000];
 
 	match server_socket.read(&mut buffer) {
 		Ok(size) => {
