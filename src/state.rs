@@ -13,6 +13,7 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
+	pub triggers: Arc<Mutex<Vec<Trigger>>>
 }
 
 #[derive(Debug)]
@@ -54,6 +55,7 @@ fn init() -> ProgramState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
 		mappings: Arc::new(Mutex::new(Vec::new())),
 		server_address: Arc::new(Mutex::new(None)),
+		triggers: Arc::new(Mutex::new(Vec::new()))
 	};
 
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
@@ -70,6 +72,7 @@ fn init() -> ProgramState {
 			ProgramState::Init
 		},
 	}
+	thread::spawn(check_triggers);
 }
 
 fn server_discovery(shared: SharedState) -> ProgramState {
@@ -123,8 +126,9 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 								shared,
 							}
 						},
-						FlightControlMessage::Trigger(_) => {
-							warn!("Received control message setting trigger. Triggers not yet supported.");
+						FlightControlMessage::Trigger(triggers) => {
+							pass!("Received mappings from server: {triggers:#?}");
+							*shared.triggers.lock().unwrap() = triggers;
 							ProgramState::WaitForOperator { server_socket, shared }
 						},
 					}
@@ -167,4 +171,16 @@ fn abort(shared: SharedState) -> ProgramState {
 		server_socket: None,
 		shared,
 	}
+}
+
+fn check_triggers (shared: SharedState) {
+	use pyo3::prelude::*;
+	let shared = shared.lock().unwrap();
+	for trigger in &shared.triggers {
+		let condition = trigger.condition.clone();
+		Python::with_gil(|py| -> Bool<()> {
+			shared.triggers.condition
+		}
+	}
+
 }
