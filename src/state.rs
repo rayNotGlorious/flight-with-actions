@@ -1,7 +1,7 @@
 use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
 use jeflog::{task, pass, warn, fail};
+use pyo3::{pyclass, pyclass::CompareOp, pymethods, types::PyNone, IntoPy, PyAny, PyObject, PyResult, Python, ToPyObject};
 use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread};
-
 use crate::{forwarder, receiver::Receiver, SERVO_PORT};
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
@@ -15,6 +15,7 @@ pub struct SharedState {
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
 	pub triggers: Arc<Mutex<Vec<Trigger>>>
 }
+
 
 #[derive(Debug)]
 pub enum ProgramState {
@@ -174,13 +175,17 @@ fn abort(shared: SharedState) -> ProgramState {
 }
 
 fn check_triggers (shared: SharedState) {
-	use pyo3::prelude::*;
 	let shared = shared.lock().unwrap();
 	for trigger in &shared.triggers {
-		let condition = trigger.condition.clone();
-		Python::with_gil(|py| -> Bool<()> {
-			shared.triggers.condition
-		}
+		let condition_str = trigger.condition.clone();
+		let is_true:bool = true;
+		Python::with_gil(|py| {
+			let condition = py.eval(condition_str, None, None)?;	
+			is_true = condition.extract::<bool>()?;	
+			Ok(())
+		});
+		if(is_true) {
+			thread::spawn(common::sequence::run(&trigger.script));
+		}		
 	}
-
 }
