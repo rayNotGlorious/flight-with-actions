@@ -16,6 +16,7 @@ enum HeartBeat {
   Acknowledged(BoardId)
 }
 
+// TODO Do heartbeat handling
 // TODO replace all unwrap() with proper error handling
 // TODO error handle all UDP sends
 // TODO error handle all Option
@@ -77,27 +78,25 @@ fn start_switchboard(bind_address: &str, state: &SharedState, sequence_rx: Recei
   let vehicle_state = state.vehicle_state.clone();
   let mut sockets: HashMap<BoardId, UdpSocket> = HashMap::new();
   let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
-  let (heartbeat_tx, heartbeat_rx) = mpsc::channel::<HeartBeat>();
 
   thread::spawn(listen(bind_address, board_tx));
-  thread::spawn(monitor(heartbeat_rx));
 
   move || {
     loop {
       match board_rx.try_recv() {
         Ok(Some(BoardCommunications::Init(board_id, socket))) => { 
           sockets.insert(board_id.to_string(), socket); 
-          heartbeat_tx.send(HeartBeat::Create(board_id)).unwrap();
+          // TODO Create heartbeat for board_id
         },
         Ok(Some(BoardCommunications::Sam(board_id, datapoints)))  => {
           process_sam_data(vehicle_state.clone(), mappings.clone(), board_id.clone(), datapoints);
-          heartbeat_tx.send(HeartBeat::Acknowledged(board_id)).unwrap();
+          // TODO Reset heartbeat for board_id
         },
         Ok(Some(BoardCommunications::Bsm(board_id))) => {
           warn!("Recieved BSM data from board {board_id}."); 
-          heartbeat_tx.send(HeartBeat::Acknowledged(board_id)).unwrap();
+          // TODO Reset heartbeat for board_id
         },
-        Ok(Some(BoardCommunications::HeartbeatAck(board_id))) => { heartbeat_tx.send(HeartBeat::Acknowledged(board_id)); },
+        Ok(Some(BoardCommunications::HeartbeatAck(board_id))) => { /* TODO Reset heartbeat for board_id */ },
         Ok(None) => { warn!("Unknown data recieved from board!"); },
         Err(TryRecvError::Disconnected) => { /* TODO figure out what to do when disconnected */ },
         Err(TryRecvError::Empty) => {}
@@ -112,26 +111,8 @@ fn start_switchboard(bind_address: &str, state: &SharedState, sequence_rx: Recei
         Err(TryRecvError::Disconnected) => { /* TODO figure out what to do when disconnected */ },
         Err(TryRecvError::Empty) => {}
       };
-    }
-  }
-}
 
-fn monitor(heartbeat_rx: Receiver<HeartBeat>) -> impl FnOnce() -> () {
-  let clocks: Arc<Mutex<HashMap<BoardId, u32>>> = Arc::new(Mutex::new(HashMap::new()));
-
-  thread::spawn(beat(clocks.clone()));
-  
-  move || {
-
-  }
-}
-
-fn beat(clocks: Arc<Mutex<HashMap<BoardId, u32>>>) -> impl FnOnce() -> () {
-  move || {
-    let mut clocks = clocks.lock().unwrap();
-
-    for clock in clocks.keys() {
-      clocks.entry(clock.to_string()).and_modify(|value| *value += 1);
+      // Heartbeat logic goes here (ask jeff if # of boards is large do it in another thread)
     }
   }
 }
