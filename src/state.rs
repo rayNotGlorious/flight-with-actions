@@ -13,7 +13,7 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub triggers: Arc<Mutex<Vec<Trigger>>>
+	pub triggers: Arc<Mutex<Vec<common::comm::Trigger>>>
 }
 
 
@@ -62,7 +62,9 @@ fn init() -> ProgramState {
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
 
 	let receiver = Receiver::new(&shared);
-
+	thread::spawn(move || {
+		check_triggers(shared);
+	});
 	match receiver.receive_data() {
 		Ok(closure) => {
 			thread::spawn(closure);
@@ -73,7 +75,7 @@ fn init() -> ProgramState {
 			ProgramState::Init
 		},
 	}
-	thread::spawn(check_triggers);
+
 }
 
 fn server_discovery(shared: SharedState) -> ProgramState {
@@ -129,7 +131,7 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 						},
 						FlightControlMessage::Trigger(triggers) => {
 							pass!("Received mappings from server: {triggers:#?}");
-							*shared.triggers.lock().unwrap() = triggers;
+							*shared.triggers.lock().unwrap() = vec![triggers];
 							ProgramState::WaitForOperator { server_socket, shared }
 						},
 					}
@@ -175,17 +177,26 @@ fn abort(shared: SharedState) -> ProgramState {
 }
 
 fn check_triggers (shared: SharedState) {
-	let shared = shared.lock().unwrap();
-	for trigger in &shared.triggers {
-		let condition_str = trigger.condition.clone();
-		let is_true:bool = true;
-		Python::with_gil(|py| {
-			let condition = py.eval(condition_str, None, None)?;	
-			is_true = condition.extract::<bool>()?;	
-			Ok(())
-		});
-		if(is_true) {
-			thread::spawn(common::sequence::run(&trigger.script));
-		}		
+	loop {
+		let triggers = shared.triggers.lock().unwrap();
+		for trigger in &*triggers {
+			let condition_str = trigger.condition.clone();
+			if let Err(err) = Python::with_gil(|py| {
+				let condition = py.eval(&*condition_str, None, None)?;	
+				if condition.extract::<bool>()? {
+					let trigger_sequence = Sequence {
+						name: String::from("Trigger"),
+						script: trigger.script,
+					};
+					thread::spawn(move || {
+						common::sequence::run(trigger_sequence);
+					});
+				}
+				Ok(())
+			}) {
+				eprintln!("Error in Python execution: {:?}", err);
+			}
+		
+		}
 	}
 }
