@@ -62,9 +62,7 @@ fn init() -> ProgramState {
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
 
 	let receiver = Receiver::new(&shared);
-	thread::spawn(move || {
-		check_triggers(shared);
-	});
+	thread::spawn(check_triggers(&shared));
 	match receiver.receive_data() {
 		Ok(closure) => {
 			thread::spawn(closure);
@@ -176,27 +174,30 @@ fn abort(shared: SharedState) -> ProgramState {
 	}
 }
 
-fn check_triggers (shared: SharedState) {
+fn check_triggers (shared: &SharedState) -> impl FnOnce() -> () {
+	let triggers = shared.triggers.clone();
+	{move ||
 	loop {
-		let triggers = shared.triggers.lock().unwrap();
+		let triggers = triggers.lock().unwrap();
 		for trigger in &*triggers {
-			let condition_str = trigger.condition.clone();
-			if let Err(err) = Python::with_gil(|py| {
-				let condition = py.eval(&*condition_str, None, None)?;	
+			if let Err(err) = Python::with_gil(|py| -> PyResult<()> {
+				let condition = py.eval(&trigger.condition, None, None)?;	
 				if condition.extract::<bool>()? {
 					let trigger_sequence = Sequence {
-						name: String::from("Trigger"),
-						script: trigger.script,
+						name: "Trigger".to_owned(),
+						script: trigger.script.clone(),
 					};
 					thread::spawn(move || {
 						common::sequence::run(trigger_sequence);
 					});
 				}
+
 				Ok(())
 			}) {
-				eprintln!("Error in Python execution: {:?}", err);
+				fail!("Error in Python execution: {:?}", err);
 			}
 		
 		}
+	}
 	}
 }
