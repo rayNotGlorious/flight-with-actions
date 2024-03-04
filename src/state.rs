@@ -8,8 +8,6 @@ use crate::{forwarder, receiver, SERVO_PORT};
 /// 
 /// Everything in this struct should be wrapped with `Arc<Mutex<T>>`. **Do not abuse this struct.**
 /// It is intended for what would typically be global state.
-pub type BoardId = String;
-
 #[derive(Debug)]
 pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
@@ -52,7 +50,7 @@ impl ProgramState {
 	}
 }
 
-const BIND_ADDRESS: &str = "0.0.0.0:4573";
+const BIND_ADDRESS: (&str, u16) = ("0.0.0.0", 4573);
 
 fn init() -> ProgramState {
 	let shared = SharedState {
@@ -65,7 +63,7 @@ fn init() -> ProgramState {
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
 
 	thread::spawn(receiver::start_switchboard(BIND_ADDRESS, &shared)
-	.expect(&format!("Cannot create bind on port {BIND_ADDRESS}")));
+	.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS)));
 
 	ProgramState::ServerDiscovery { shared }
 }
