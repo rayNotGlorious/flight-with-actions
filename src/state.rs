@@ -1,6 +1,6 @@
 use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
 use jeflog::{task, pass, warn, fail};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread};
+use std::{ fmt, io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread};
 
 use crate::{forwarder, receiver::Receiver, SERVO_PORT};
 
@@ -17,27 +17,47 @@ pub struct SharedState {
 
 #[derive(Debug)]
 pub enum ProgramState {
+	/// The initialization state, which primarily spawns background threads
+	/// and transitions to the `ServerDiscovery` state.
 	Init,
+	
+	/// State which loops through potential server hostnames until locating the
+	/// server and connecting to it via TCP.
 	ServerDiscovery {
+		/// The shared flight state.
 		shared: SharedState,
 	},
+
+	/// State which waits for an operator command, such as setting mappings or
+	/// running a sequence.
 	WaitForOperator {
 		server_socket: TcpStream,
 
+		/// The shared flight state.
 		shared: SharedState,
 	},
+
+	/// State which spawns a thread to run a sequence before returning to the
+	/// `WaitForOperator` state.
 	RunSequence {
 		server_socket: Option<TcpStream>,
+
+		/// A full description of the sequence to run.
 		sequence: Sequence,
 
+		/// The shared flight state.
 		shared: SharedState,
 	},
+
+	/// The abort state, which safes the system and returns to `Init`.
 	Abort {
+		/// The shared flight state.
 		shared: SharedState
 	},
 }
 
 impl ProgramState {
+	/// Perform transition to the next state, returning the next state. 
 	pub fn next(self) -> Self {
 		match self {
 			ProgramState::Init => init(),
@@ -45,6 +65,27 @@ impl ProgramState {
 			ProgramState::WaitForOperator { server_socket, shared } => wait_for_operator(server_socket, shared),
 			ProgramState::RunSequence { server_socket, sequence, shared } => run_sequence(server_socket, sequence, shared),
 			ProgramState::Abort { shared } => abort(shared),
+		}
+	}
+}
+
+impl fmt::Display for ProgramState {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Init => write!(f, "Init"),
+			Self::ServerDiscovery { .. } => write!(f, "ServerDiscovery"),
+			Self::WaitForOperator { server_socket, .. } => {
+				let peer_address = server_socket
+					.peer_addr()
+					.map(|addr| addr.to_string())
+					.unwrap_or("unknown".to_owned());
+
+				write!(f, "WaitForOperator(server = {peer_address})")
+			},
+			Self::RunSequence { sequence, .. } => {
+				write!(f, "RunSequence(name = {})", sequence.name)
+			},
+			Self::Abort { .. } => write!(f, "Abort"),
 		}
 	}
 }
