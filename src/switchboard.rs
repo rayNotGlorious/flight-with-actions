@@ -1,7 +1,12 @@
-use std::{collections::{HashMap, HashSet}, net::UdpSocket, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread};
+use std::{collections::{HashMap, HashSet}, net::UdpSocket, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Duration};
 use common::comm::{BoardId, ChannelType, DataMessage, DataPoint, Measurement, NodeMapping, Sequence, Unit, VehicleState};
-use jeflog::warn;
+use jeflog::{fail, warn};
 use crate::state::SharedState;
+
+/// Milliseconds of inactivity before we sent a heartbeat
+const HEARTBEAT_TIMEOUT_MS: u32 = 200;
+/// How many heartbeats should be sent before we consider the data board to be disconnected
+const HEARTBEAT_MAX_TIMEOUT: u8 = 3;
 
 enum BoardCommunications {
   Init(BoardId, UdpSocket),
@@ -10,13 +15,6 @@ enum BoardCommunications {
   Bsm(BoardId)
 }
 
-enum HeartBeat {
-  Send(BoardId),
-  Create(BoardId),
-  Acknowledged(BoardId)
-}
-
-// TODO Do heartbeat handling
 // TODO replace all unwrap() with proper error handling
 // TODO error handle all UDP sends
 // TODO error handle all Option
@@ -77,6 +75,7 @@ fn start_switchboard(bind_address: &str, state: &SharedState, sequence_rx: Recei
   let mappings = state.mappings.clone();
   let vehicle_state = state.vehicle_state.clone();
   let mut sockets: HashMap<BoardId, UdpSocket> = HashMap::new();
+  let mut timers: HashMap<BoardId, (u32, u8)> = HashMap::new();
   let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
 
   thread::spawn(listen(bind_address, board_tx));
@@ -85,18 +84,19 @@ fn start_switchboard(bind_address: &str, state: &SharedState, sequence_rx: Recei
     loop {
       match board_rx.try_recv() {
         Ok(Some(BoardCommunications::Init(board_id, socket))) => { 
-          sockets.insert(board_id.to_string(), socket); 
-          // TODO Create heartbeat for board_id
+          sockets.insert(board_id.to_string(), socket);
+
+          timers.insert(board_id, (0, 0));
         },
         Ok(Some(BoardCommunications::Sam(board_id, datapoints)))  => {
           process_sam_data(vehicle_state.clone(), mappings.clone(), board_id.clone(), datapoints);
-          // TODO Reset heartbeat for board_id
+          reset(&board_id, *timers.get_mut(&board_id).unwrap());
         },
         Ok(Some(BoardCommunications::Bsm(board_id))) => {
           warn!("Recieved BSM data from board {board_id}."); 
-          // TODO Reset heartbeat for board_id
+          reset(&board_id, *timers.get_mut(&board_id).unwrap());
         },
-        Ok(Some(BoardCommunications::HeartbeatAck(board_id))) => { /* TODO Reset heartbeat for board_id */ },
+        Ok(Some(BoardCommunications::HeartbeatAck(board_id))) => { reset(&board_id, *timers.get_mut(&board_id).unwrap()); },
         Ok(None) => { warn!("Unknown data recieved from board!"); },
         Err(TryRecvError::Disconnected) => { /* TODO figure out what to do when disconnected */ },
         Err(TryRecvError::Empty) => {}
@@ -104,15 +104,31 @@ fn start_switchboard(bind_address: &str, state: &SharedState, sequence_rx: Recei
 
       match sequence_rx.try_recv() {
         Ok((board_id, sequence)) => {
-          let mut buf: Vec<u8> = vec![0; std::mem::size_of::<Sequence>() + 10];
+          let mut buf: Vec<u8> = vec![0; 1024];
 
           sockets.get(&board_id).unwrap().send(postcard::to_slice(&sequence, &mut buf).unwrap()); 
         },
         Err(TryRecvError::Disconnected) => { /* TODO figure out what to do when disconnected */ },
         Err(TryRecvError::Empty) => {}
       };
+      
+      for (board_id, timer) in timers.iter_mut() {
+        timer.0 += 1;
+        if timer.0 > HEARTBEAT_TIMEOUT_MS {
+          timer.0 = 0;
+          timer.1 += 1;
 
-      // Heartbeat logic goes here (ask jeff if # of boards is large do it in another thread)
+          if timer.1 > HEARTBEAT_MAX_TIMEOUT {
+            disconnection_handler(&board_id);
+          } else {
+            let mut buf: Vec<u8> = vec![0; 1024];
+            
+            sockets.get(board_id).unwrap().send(postcard::to_slice(&DataMessage::FlightHeartbeat, &mut buf).unwrap());
+          }
+        }
+      }
+
+      thread::sleep(Duration::from_millis(1));
     }
   }
 }
@@ -150,8 +166,21 @@ fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex
 				}
 			}
 
-			vehicle_state.sensor_readings.insert(mapping.text_id.clone(), Measurement { value, unit });
+			vehicle_state.sensor_readings.insert(mapping.text_id, Measurement { value, unit });
 		}
 	}
 	// TODO: push channel bursts into log file.
-}	
+}
+
+fn disconnection_handler(board_id: &str) {
+  fail!("{board_id} isn't responding!.");
+}
+
+fn reset(board_id: &str, &mut timer: (u32, u8)) {
+  if timer.1 > 3 {
+    warn!("{board_id} has reconnected!");
+  }
+
+  timer.0 = 0;
+  timer.1 = 0;
+}
