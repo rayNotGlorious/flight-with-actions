@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-common = { path = "/Users/jeffreyshelton/Dev/common", features = ["sequences"] }
+common = { git = "https://github.com/gt-space/common", branch = "valve-feedback", features = ["sequences"] }
 jeflog = "0.1.0"
 postcard = { version = "1.0.8", features = ["alloc"] }
