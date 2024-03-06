@@ -195,6 +195,8 @@ fn abort(shared: SharedState) -> ProgramState {
 fn check_triggers(shared: &SharedState) -> impl FnOnce() -> () {
 	let triggers = shared.triggers.clone();
 
+	// return closure instead of using the function itself because of borrow-checking
+	// rules regarding moving the 'triggers' reference across closure bounds
 	move || {
 		loop {
 			let mut triggers = triggers.lock().unwrap();
@@ -215,7 +217,9 @@ fn check_triggers(shared: &SharedState) -> impl FnOnce() -> () {
 						script: trigger.script.clone(),
 					};
 
-					println!("passed! running sequence {}", trigger.script);
+					// run sequence in the same thread so there is no rapid-fire
+					// sequence dispatches if a trigger is tripped
+					// note: this is intentionally blocking
 					common::sequence::run(sequence);
 				}
 
@@ -225,8 +229,9 @@ fn check_triggers(shared: &SharedState) -> impl FnOnce() -> () {
 				}
 			}
 
+			// drop triggers before waiting so the lock isn't held over the wait
 			drop(triggers);
-			thread::sleep(Duration::from_millis(100));
+			thread::sleep(Duration::from_millis(10));
 		}
 	}
 }
