@@ -1,8 +1,8 @@
-use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
+use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState, BoardId};
 use jeflog::{task, pass, warn, fail};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread, collections::HashMap};
+use std::{io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::Sender, Arc, Mutex}, thread};
 
-use crate::{forwarder, receiver, SERVO_PORT};
+use crate::{forwarder, switchboard, SERVO_PORT};
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
 /// 
@@ -13,7 +13,7 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub write_streams: Arc<Mutex<HashMap<BoardId, TcpStream>>>
+	pub sequence_tx: Sender<(BoardId, Sequence)>
 }
 
 #[derive(Debug)]
@@ -53,17 +53,17 @@ impl ProgramState {
 const BIND_ADDRESS: (&str, u16) = ("0.0.0.0", 4573);
 
 fn init() -> ProgramState {
+
+	let home_socket = UdpSocket::bind(BIND_ADDRESS)
+	.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
 	let shared = SharedState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
 		mappings: Arc::new(Mutex::new(Vec::new())),
 		server_address: Arc::new(Mutex::new(None)),
-		write_streams: Arc::new(Mutex::new(HashMap::new()))
+		sequence_tx: switchboard::run(home_socket, &shared)
 	};
 
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
-
-	thread::spawn(receiver::start_switchboard(BIND_ADDRESS, &shared)
-	.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS)));
 
 	ProgramState::ServerDiscovery { shared }
 }
