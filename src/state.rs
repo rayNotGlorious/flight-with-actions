@@ -1,7 +1,7 @@
 use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
 use jeflog::{task, pass, warn, fail};
+use pyo3::{pyclass, pyclass::CompareOp, pymethods, types::PyNone, IntoPy, PyAny, PyObject, PyResult, Python, ToPyObject};
 use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread};
-
 use crate::{forwarder, receiver::Receiver, SERVO_PORT};
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
@@ -13,7 +13,9 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
+	pub triggers: Arc<Mutex<Vec<common::comm::Trigger>>>
 }
+
 
 #[derive(Debug)]
 pub enum ProgramState {
@@ -54,12 +56,13 @@ fn init() -> ProgramState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
 		mappings: Arc::new(Mutex::new(Vec::new())),
 		server_address: Arc::new(Mutex::new(None)),
+		triggers: Arc::new(Mutex::new(Vec::new()))
 	};
 
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
 
 	let receiver = Receiver::new(&shared);
-
+	thread::spawn(check_triggers(&shared));
 	match receiver.receive_data() {
 		Ok(closure) => {
 			thread::spawn(closure);
@@ -70,6 +73,7 @@ fn init() -> ProgramState {
 			ProgramState::Init
 		},
 	}
+
 }
 
 fn server_discovery(shared: SharedState) -> ProgramState {
@@ -123,8 +127,9 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 								shared,
 							}
 						},
-						FlightControlMessage::Trigger(_) => {
-							warn!("Received control message setting trigger. Triggers not yet supported.");
+						FlightControlMessage::Trigger(triggers) => {
+							pass!("Received mappings from server: {triggers:#?}");
+							*shared.triggers.lock().unwrap() = vec![triggers];
 							ProgramState::WaitForOperator { server_socket, shared }
 						},
 					}
@@ -166,5 +171,33 @@ fn abort(shared: SharedState) -> ProgramState {
 		},
 		server_socket: None,
 		shared,
+	}
+}
+
+fn check_triggers (shared: &SharedState) -> impl FnOnce() -> () {
+	let triggers = shared.triggers.clone();
+	{move ||
+	loop {
+		let triggers = triggers.lock().unwrap();
+		for trigger in &*triggers {
+			if let Err(err) = Python::with_gil(|py| -> PyResult<()> {
+				let condition = py.eval(&trigger.condition, None, None)?;	
+				if condition.extract::<bool>()? {
+					let trigger_sequence = Sequence {
+						name: "Trigger".to_owned(),
+						script: trigger.script.clone(),
+					};
+					thread::spawn(move || {
+						common::sequence::run(trigger_sequence);
+					});
+				}
+
+				Ok(())
+			}) {
+				fail!("Error in Python execution: {:?}", err);
+			}
+		
+		}
+	}
 	}
 }
