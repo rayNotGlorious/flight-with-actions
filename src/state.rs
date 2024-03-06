@@ -1,7 +1,7 @@
-use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
+use common::comm::{FlightControlMessage, NodeMapping, Sequence, Trigger, VehicleState};
 use jeflog::{task, pass, warn, fail};
-use pyo3::{pyclass, pyclass::CompareOp, pymethods, types::PyNone, IntoPy, PyAny, PyObject, PyResult, Python, ToPyObject};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread};
+use pyo3::{PyResult, Python};
+use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread, time::Duration};
 use crate::{forwarder, receiver::Receiver, SERVO_PORT};
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
@@ -63,6 +63,7 @@ fn init() -> ProgramState {
 
 	let receiver = Receiver::new(&shared);
 	thread::spawn(check_triggers(&shared));
+
 	match receiver.receive_data() {
 		Ok(closure) => {
 			thread::spawn(closure);
@@ -127,9 +128,26 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 								shared,
 							}
 						},
-						FlightControlMessage::Trigger(triggers) => {
-							pass!("Received mappings from server: {triggers:#?}");
-							*shared.triggers.lock().unwrap() = vec![triggers];
+						FlightControlMessage::Trigger(trigger) => {
+							pass!("Received trigger from server: {trigger:#?}");
+							
+							// update existing trigger if one has the same name
+							// otherwise, add a new trigger to the vec
+							let mut triggers = shared.triggers.lock().unwrap();
+
+							let existing = triggers
+								.iter()
+								.position(|t| t.name == trigger.name);
+
+							if let Some(index) = existing {
+								triggers[index] = trigger;
+							} else {
+								triggers.push(trigger);
+							}
+
+							// necessary to allow passing 'shared' back to WaitForOperator
+							drop(triggers);
+
 							ProgramState::WaitForOperator { server_socket, shared }
 						},
 					}
@@ -174,30 +192,41 @@ fn abort(shared: SharedState) -> ProgramState {
 	}
 }
 
-fn check_triggers (shared: &SharedState) -> impl FnOnce() -> () {
+fn check_triggers(shared: &SharedState) -> impl FnOnce() -> () {
 	let triggers = shared.triggers.clone();
-	{move ||
-	loop {
-		let triggers = triggers.lock().unwrap();
-		for trigger in &*triggers {
-			if let Err(err) = Python::with_gil(|py| -> PyResult<()> {
-				let condition = py.eval(&trigger.condition, None, None)?;	
-				if condition.extract::<bool>()? {
-					let trigger_sequence = Sequence {
-						name: "Trigger".to_owned(),
+
+	move || {
+		loop {
+			let mut triggers = triggers.lock().unwrap();
+
+			for trigger in triggers.iter_mut() {
+				// perform check by running condition as Python script and getting truth value
+				let check = Python::with_gil(|py| {
+					py.eval(&trigger.condition, None, None)
+						.and_then(|condition| {
+							condition.extract::<bool>()
+						})
+				});
+
+				// checks if the condition evaluated true
+				if check.as_ref().is_ok_and(|c| *c) {
+					let sequence = Sequence {
+						name: format!("trigger_{}", trigger.name),
 						script: trigger.script.clone(),
 					};
-					thread::spawn(move || {
-						common::sequence::run(trigger_sequence);
-					});
+
+					println!("passed! running sequence {}", trigger.script);
+					common::sequence::run(sequence);
 				}
 
-				Ok(())
-			}) {
-				fail!("Error in Python execution: {:?}", err);
+				if let Err(error) = check {
+					fail!("Trigger '{}' raised exception during execution: {error}", trigger.name);
+					trigger.active = false;
+				}
 			}
-		
+
+			drop(triggers);
+			thread::sleep(Duration::from_millis(100));
 		}
-	}
 	}
 }

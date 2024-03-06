@@ -43,8 +43,9 @@ impl Receiver {
 						}
 
 						match postcard::from_bytes::<DataMessage>(&buffer[..size]) {
-							Ok(DataMessage::Sam(data_points)) => self.process_sam_data(&socket_map, source, data_points.into_owned()),
-							Ok(DataMessage::Bms) => self.process_bms_data(),
+							Ok(DataMessage::Sam(_, data_points)) => self.process_sam_data(&socket_map, source, data_points.into_owned()),
+							Ok(DataMessage::Bms(_)) => self.process_bms_data(),
+							Ok(_) => warn!("unsupported, will be added shortly"),
 							Err(error) => {
 								warn!("Failed to deserialize data message: {}.", error.to_string());
 							},
@@ -73,13 +74,9 @@ impl Receiver {
 
 		move || {
 			while let Some(socket_map) = socket_map.upgrade() {
-				let Ok(mappings) = mappings.lock() else {
-					fail!("Failed to lock mappings in discover_boards.");
-					return;
-				};
-				
+				let mappings = mappings.lock().unwrap().clone();
 
-				for mapping in &*mappings {
+				for mapping in mappings {
 					if let Ok(mut addresses) = format!("{}.local:1", mapping.board_id).to_socket_addrs() {
 						let ipv4 = addresses.find(|addr| addr.is_ipv4()).unwrap();
 	
