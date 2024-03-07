@@ -3,27 +3,41 @@ use crate::state::SharedState;
 use jeflog::{fail, pass, warn};
 use std::{
 	collections::HashMap,
-	net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket},
-	io,
-	sync::{Arc, Mutex},
-	thread,
+	env, 
+	fs::{File, OpenOptions},
+	io::{self, Write}, 
+	net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket}, 
+	sync::{Arc, Mutex}, 
+	thread, 
 	time::Duration
 };
 
 pub struct Receiver {
 	vehicle_state: Arc<Mutex<VehicleState>>,
 	mappings: Arc<Mutex<Vec<NodeMapping>>>,
+	log_file: File,
 }
 
 impl Receiver {
-	pub fn new(shared: &SharedState) -> Self {
-		Receiver {
-			vehicle_state: shared.vehicle_state.clone(),
-			mappings: shared.mappings.clone(),
-		}
-	}
+    pub fn new(shared: &SharedState) -> io::Result<Self> {
+        let home_dir = env::var("HOME")
+            .expect("Failed to find home directory.");
 
-	pub fn receive_data(self) -> io::Result<impl FnOnce() -> ()> {
+		let file_path = format!("{}/bin", home_dir);
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(file_path)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to open file: {}", e)))?;
+
+        Ok(Receiver {
+            vehicle_state: shared.vehicle_state.clone(),
+            mappings: shared.mappings.clone(),
+            log_file: file,
+        })
+    }
+
+	pub fn receive_data(mut self) -> io::Result<impl FnOnce() -> ()> {
 		let socket_map = Arc::new(Mutex::new(HashMap::new()));
 
 		// TODO: change this when switching to TCP
@@ -49,6 +63,17 @@ impl Receiver {
 								warn!("Failed to deserialize data message: {}.", error.to_string());
 							},
 						}
+
+						let result: Result<(), io::Error> = self.log_file
+							.write_all(&(buffer.len() as u32).to_le_bytes())
+							.and_then(|_| {
+								self.log_file.write_all(&buffer)
+							});
+
+						if let Err(error) = result {
+							warn!("Failed to log data: {}", error.to_string());
+						}
+
 					},
 					Err(error) => {
 						warn!("Failed to receive data on UDP socket: {}.", error.to_string());
@@ -158,4 +183,5 @@ impl Receiver {
 	fn process_bms_data(&self) {
 		warn!("Received BMS data message. Processing not currently supported.");
 	}
+
 }

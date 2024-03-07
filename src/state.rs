@@ -1,6 +1,6 @@
 use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
 use jeflog::{task, pass, warn, fail};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread};
+use std::{collections::HashMap, io::{self, Read}, net::{IpAddr, TcpStream},sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, thread, thread::JoinHandle,};
 
 use crate::{forwarder, receiver::Receiver, SERVO_PORT};
 
@@ -13,6 +13,8 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
+	pub sequence_threads: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+	pub abort_signal: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -54,21 +56,31 @@ fn init() -> ProgramState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
 		mappings: Arc::new(Mutex::new(Vec::new())),
 		server_address: Arc::new(Mutex::new(None)),
+		sequence_threads: Arc::new(Mutex::new(HashMap::new())),
+		abort_signal: Arc::new(AtomicBool::new(false)),
 	};
 
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
+	 let receiver = loop {
+		match Receiver::new(&shared) {
+			Ok(initalized) => break initalized,
+			Err(error) => {
+				fail!("Error initializing receiver: {error}");
+			}
+		};
+	};
 
-	let receiver = Receiver::new(&shared);
+	println!("Receiver successfully initialized!");
 
 	match receiver.receive_data() {
 		Ok(closure) => {
 			thread::spawn(closure);
 			ProgramState::ServerDiscovery { shared }
-		},
+		}
 		Err(error) => {
 			fail!("Failed to create data forwarding closure: {error}");
 			ProgramState::Init
-		},
+		}
 	}
 }
 
@@ -146,15 +158,47 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 }
 
 fn run_sequence(server_socket: Option<TcpStream>, sequence: Sequence, shared: SharedState) -> ProgramState {
-	common::sequence::run(sequence);
+	// Immediately check for an abort signal before proceeding
+	if shared.abort_signal.load(Ordering::SeqCst) {
+		// If an abort has been signaled, skip running the new sequence
+		warn!("Abort signal detected. Skipping sequence execution.");
+		return ProgramState::Abort { shared };
+	}
 
-	// differentiates between an abort sequence and a normal sequence.
-	// abort does not have access to the server socket, so it gives None for it.
-	// if an abort is run, then we need to return to ServerDiscovery to reconnect.
 	if let Some(server_socket) = server_socket {
-		ProgramState::WaitForOperator { server_socket, shared }
+		let sequence_name = sequence.name.clone();
+		let abort_signal_clone = shared.abort_signal.clone();
+		// Clone sequence_name for use inside the thread closure
+		let sequence_name_clone = sequence_name.clone();
+
+		// Spawn a new thread for running the sequence
+		let handle = thread::spawn(move || {
+			// Here, before performing any operation that might take time or interact with external components,
+			// you should check the abort signal. This is a simplified placeholder for where you might interact with external systems.
+			if abort_signal_clone.load(Ordering::SeqCst) {
+				warn!("Abort signal detected. Terminating sequence: {}", sequence_name_clone);
+				return;
+			}
+			common::sequence::run(sequence);
+
+			// Example of hypothetically periodically checking the abort signal in a loop (if applicable)
+			// for _ in some_iterable {
+			//     if abort_signal_clone.load(Ordering::SeqCst) {
+			//         warn!("Abort signal detected during sequence. Terminating: {}", sequence_name_clone);
+			//         return;
+			//     }
+			//     // Perform operation
+			// }
+		});
+
+		shared.sequence_threads.lock().unwrap().insert(sequence_name, handle);
+
+		ProgramState::WaitForOperator {
+			server_socket,
+			shared,
+		}
 	} else {
-		ProgramState::ServerDiscovery { shared }
+		ProgramState::Abort { shared }
 	}
 }
 
