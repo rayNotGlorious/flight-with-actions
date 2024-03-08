@@ -1,6 +1,6 @@
 use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState, BoardId};
 use jeflog::{task, pass, warn, fail};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::Sender, Arc, Mutex}, thread};
+use std::{io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::{self, Sender}, Arc, Mutex}, thread};
 
 use crate::{forwarder, switchboard, SERVO_PORT};
 
@@ -60,8 +60,10 @@ fn init() -> ProgramState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
 		mappings: Arc::new(Mutex::new(Vec::new())),
 		server_address: Arc::new(Mutex::new(None)),
-		sequence_tx: switchboard::run(home_socket, &shared)
+		sequence_tx: mpsc::channel().0
 	};
+
+	shared.sequence_tx = switchboard::run(home_socket, shared.mappings, shared.vehicle_state);
 
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
 

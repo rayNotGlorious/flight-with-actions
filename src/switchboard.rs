@@ -1,7 +1,6 @@
 use std::{collections::{HashMap, HashSet}, net::UdpSocket, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Duration};
 use common::comm::{BoardId, ChannelType, DataMessage, DataPoint, Measurement, NodeMapping, Sequence, Unit, VehicleState};
 use jeflog::{task, fail, warn, pass};
-use crate::state::SharedState;
 
 /// Milliseconds of inactivity before we sent a heartbeat
 const HEARTBEAT_TIMEOUT_MS: u32 = 200;
@@ -15,18 +14,14 @@ enum BoardCommunications {
   Bsm(BoardId)
 }
 
-// TODO replace all unwrap() with proper error handling
-// TODO error handle all UDP sends
-// TODO error handle all Option
-
-/// one-shot thread spawner, begins switchboard logic
-pub fn run(home_socket: UdpSocket, state: &SharedState) -> Sender<(BoardId, Sequence)> {
+/// One-shot thread spawner, begins switchboard logic.
+pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>) -> Sender<(BoardId, Sequence)> {
   let (tx, rx) = mpsc::channel::<(BoardId, Sequence)>();
-  thread::spawn(start_switchboard(home_socket, state, rx));
+  thread::spawn(start_switchboard(home_socket, mappings, vehicle_state, rx));
   tx
 }
 
-/// constantly checks main binding for board data, handles board initalization and data encoding
+/// Constantly checks main binding for board data, handles board initalization and data encoding.
 fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>) -> impl FnOnce() -> () {
   move || {
     let mut buf = vec![0; 1024];
@@ -114,9 +109,9 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 }
 
 /// owns sockets and SharedState, changes must be sent via mpsc channel
-fn start_switchboard(home_socket: UdpSocket, state: &SharedState, sequence_rx: Receiver<(BoardId, Sequence)>) -> impl FnOnce() -> () {
-  let mappings = state.mappings.clone();
-  let vehicle_state = state.vehicle_state.clone();
+fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>, sequence_rx: Receiver<(BoardId, Sequence)>) -> impl FnOnce() -> () {
+  let mappings = mappings.clone();
+  let vehicle_state = vehicle_state.clone();
   let mut sockets: HashMap<BoardId, UdpSocket> = HashMap::new();
   let mut timers: HashMap<BoardId, (u32, u8)> = HashMap::new();
   let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();

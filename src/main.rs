@@ -1,5 +1,4 @@
 mod forwarder;
-mod receiver;
 mod state;
 mod switchboard;
 
