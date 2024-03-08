@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, net::UdpSocket, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Duration};
 use common::comm::{BoardId, ChannelType, DataMessage, DataPoint, Measurement, NodeMapping, Sequence, Unit, VehicleState};
-use jeflog::{fail, warn};
+use jeflog::{task, fail, warn, pass};
 use crate::state::SharedState;
 
 /// Milliseconds of inactivity before we sent a heartbeat
@@ -29,40 +29,86 @@ pub fn run(home_socket: UdpSocket, state: &SharedState) -> Sender<(BoardId, Sequ
 /// constantly checks main binding for board data, handles board initalization and data encoding
 fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>) -> impl FnOnce() -> () {
   move || {
-    let mut buffer = vec![0; 1024];
+    let mut buf = vec![0; 1024];
     
     let mut established_sockets = HashSet::new();
 
+    task!("Flight Computer listening for SAM data...");
     loop {
-      let (size, incoming_address) = home_socket.recv_from(&mut buffer).unwrap();
+      while let Ok((size, incoming_address)) = home_socket.recv_from(&mut buf) {
+        task!("Detected datagram.");
+        if size > buf.len() {
+          warn!("Buffer is too small for datagram, resizing...");
+          buf.resize(size, 0);
+          break;
+        }
+        pass!("Stored within buffer.");
 
-      if size > buffer.len() {
-        buffer.resize(size, 0);
-        continue;
-      }
-
-      let raw_data = postcard::from_bytes::<DataMessage>(&mut buffer[..size]).unwrap();
-
-      board_tx.send(match raw_data {
-        DataMessage::Establish(board_id, address) => {
-          if established_sockets.contains(&incoming_address) {
+        task!("Interpreting buffer...");
+        let raw_data = match postcard::from_bytes::<DataMessage>(&mut buf[..size]) {
+          Ok(data) => data,
+          Err(e) => {
+            fail!("postcard couldn't interpret the datagram: {e}");
             continue;
           }
-          established_sockets.insert(incoming_address);
+        };
+        pass!("Interpreted buffer.");
+  
+        task!("Decoding buffer...");
+        board_tx.send(match raw_data {
+          DataMessage::Establish(board_id, address) => {
+            if established_sockets.contains(&incoming_address) {
+              warn!("{board_id} tried to re-establish previously established socket. Ignoring.");
+              continue;
+            }
+            established_sockets.insert(incoming_address);
+  
+            let write_socket = match UdpSocket::bind(address) {
+              Ok(socket) => socket,
+              Err(e) => {
+                fail!("Could not bind to socket: {e}");
+                continue;
+              }
+            };
 
-          let write_socket = UdpSocket::bind(address).unwrap();
+  
+            let value = DataMessage::FlightEstablishAck(None);
 
-          let value = DataMessage::FlightEstablishAck(None);
-          postcard::to_slice(&value, &mut buffer).unwrap();
-          write_socket.send(&buffer);
+            if let Err(e) = postcard::to_slice(&value, &mut buf) {
+              warn!("postcard returned this error when attempting to serialize DataMessage::FlightEstablishAck: {e}");
+              continue;
+            }
 
-          Some(BoardCommunications::Init(board_id, write_socket))
-        },
-        DataMessage::Sam(board_id, datapoints) => Some(BoardCommunications::Sam(board_id, datapoints.to_vec())),
-        DataMessage::Bms(board_id) => Some(BoardCommunications::Bsm(board_id)),
-        DataMessage::HeartbeatAck(board_id) => Some(BoardCommunications::HeartbeatAck(board_id)),
-        _ => None
-      }).unwrap();
+            if let Err(e) = write_socket.send(&buf) {
+              fail!("Couldn't send sequence to socket {:#?}: {e}", write_socket);
+            } else {
+              pass!("Sent sequence successfully!");
+            }
+  
+            Some(BoardCommunications::Init(board_id, write_socket))
+          },
+          DataMessage::Sam(board_id, datapoints) => {
+            pass!("DataMessage::Sam found!");
+
+            Some(BoardCommunications::Sam(board_id, datapoints.to_vec()))
+          },
+          DataMessage::Bms(board_id) => {
+            pass!("DataMessage::Bms found!");
+
+            Some(BoardCommunications::Bsm(board_id))
+          },
+          DataMessage::HeartbeatAck(board_id) => {
+            pass!("Heartbeat found!");
+
+            Some(BoardCommunications::HeartbeatAck(board_id))
+          },
+          _ => {
+            warn!("Unknown data found.");
+
+            None
+          }
+        }).expect("board_tx closed unexpectedly. This shouldn't happen.");
+      }
     }
   }
 }
@@ -120,16 +166,19 @@ fn start_switchboard(home_socket: UdpSocket, state: &SharedState, sequence_rx: R
           let mut buf: Vec<u8> = vec![0; 1024];
 
           if let Err(e) = postcard::to_slice(&sequence, &mut buf) {
-            warn!("postcard returned this error when attempting to serialize sequence {:#?}: {e}", sequence);
+            fail!("postcard returned this error when attempting to serialize sequence {:#?}: {e}", sequence);
             break 'a;
           }
           
           if let Some(socket) = sockets.get(&board_id) {
             if let Err(e) = socket.send(&buf) {
-              warn!("Couldn't send sequence to socket {:#?}: {e}", socket);
+              fail!("Couldn't send sequence to socket {:#?}: {e}", socket);
+            } else {
+              pass!("Sent sequence successfully!");
             }
+
           } else {
-            warn!("Couldn't find socket with board ID {board_id} in sockets HashMap.");
+            fail!("Couldn't find socket with board ID {board_id} in sockets HashMap.");
           }
         },
         Err(TryRecvError::Disconnected) => { warn!("Lost connection to listen() channel. This isn't supposed to happen."); },
