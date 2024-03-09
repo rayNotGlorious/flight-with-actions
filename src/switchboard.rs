@@ -45,7 +45,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 			// interpret data from SAM board
 			match board_rx.try_recv() {
 				Ok(Some(BoardCommunications::Init(board_id, address))) => {
-					thread::sleep(Duration::from_millis(100));
+					// thread::sleep(Duration::from_millis(100));
 					new_board_tx.send(address).expect("Can't find pulse for new board. This shouldn't happen.");
 					
 					sockets.insert(board_id.to_string(), address);
