@@ -1,8 +1,10 @@
-use common::comm::{FlightControlMessage, NodeMapping, Sequence, Trigger, VehicleState};
+use bimap::BiHashMap;
+use common::{comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState}, sequence};
 use jeflog::{task, pass, warn, fail};
-use pyo3::{PyResult, Python};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread, time::Duration};
-use crate::{forwarder, receiver::Receiver, SERVO_PORT};
+use pyo3::Python;
+use std::{io::{self, Read}, net::{IpAddr, TcpStream}, sync::{Arc, Mutex}, thread::{self, ThreadId}, time::Duration};
+
+use crate::{forwarder, handler::create_device_handler, receiver::Receiver, SERVO_PORT};
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
 /// 
@@ -13,7 +15,8 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub triggers: Arc<Mutex<Vec<common::comm::Trigger>>>
+	pub triggers: Arc<Mutex<Vec<common::comm::Trigger>>>,
+	pub sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>,
 }
 
 
@@ -56,10 +59,12 @@ fn init() -> ProgramState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
 		mappings: Arc::new(Mutex::new(Vec::new())),
 		server_address: Arc::new(Mutex::new(None)),
-		triggers: Arc::new(Mutex::new(Vec::new()))
+		triggers: Arc::new(Mutex::new(Vec::new())),
+		sequences: Arc::new(Mutex::new(BiHashMap::new())),
 	};
 
-	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
+	sequence::initialize(shared.mappings.clone());
+	sequence::set_device_handler(create_device_handler(&shared));
 
 	let receiver = Receiver::new(&shared);
 	thread::spawn(check_triggers(&shared));
@@ -68,11 +73,11 @@ fn init() -> ProgramState {
 		Ok(closure) => {
 			thread::spawn(closure);
 			ProgramState::ServerDiscovery { shared }
-		},
+		}
 		Err(error) => {
 			fail!("Failed to create data forwarding closure: {error}");
 			ProgramState::Init
-		},
+		}
 	}
 
 }
@@ -169,14 +174,25 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 }
 
 fn run_sequence(server_socket: Option<TcpStream>, sequence: Sequence, shared: SharedState) -> ProgramState {
-	common::sequence::run(sequence);
-
-	// differentiates between an abort sequence and a normal sequence.
-	// abort does not have access to the server socket, so it gives None for it.
-	// if an abort is run, then we need to return to ServerDiscovery to reconnect.
 	if let Some(server_socket) = server_socket {
+		let thread_id = thread::spawn(|| sequence::run(sequence))
+			.thread()
+			.id();
+
+		shared.sequences
+			.lock()
+			.unwrap()
+			.insert(sequence.name.clone(), thread_id);
+
 		ProgramState::WaitForOperator { server_socket, shared }
 	} else {
+		shared.sequences
+			.lock()
+			.unwrap()
+			.clear();
+
+		sequence::run(sequence);
+
 		ProgramState::ServerDiscovery { shared }
 	}
 }
