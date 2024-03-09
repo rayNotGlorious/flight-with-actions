@@ -116,72 +116,70 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 /// Constantly checks main binding for board data, handles board initalization and data encoding.
 fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>) -> impl FnOnce() -> () {
 	move || {
-		let mut buf = vec![0; 1024];
+		let mut buf = [0; 1_000_000];
 		
 		let mut established_sockets = HashSet::new();
 
 		task!("Flight Computer listening for SAM data...");
 		loop {
-			while let Ok((size, incoming_address)) = home_socket.recv_from(&mut buf) {
-				task!("Detected datagram.");
-				if size > buf.len() {
-					warn!("Buffer is too small for datagram, resizing...");
-					buf.resize(size, 0);
-					break;
+			let (size, incoming_address) = match home_socket.recv_from(&mut buf) {
+				Ok(tuple) => tuple,
+				Err(e) => {
+					warn!("Error in receiving data from home_socket: {e}.");
+					continue;
 				}
-				pass!("Stored within buffer.");
+			};
 
-				task!("Interpreting buffer...");
-				let raw_data = match postcard::from_bytes::<DataMessage>(&mut buf[..size]) {
-					Ok(data) => data,
-					Err(e) => {
-						fail!("postcard couldn't interpret the datagram: {e}");
+			task!("Interpreting buffer...");
+			let raw_data = match postcard::from_bytes::<DataMessage>(&mut buf[..size]) {
+				Ok(data) => data,
+				Err(e) => {
+					fail!("postcard couldn't interpret the datagram: {e}");
+					continue;
+				}
+			};
+			pass!("Interpreted buffer.");
+
+			task!("Decoding buffer...");
+			board_tx.send(match raw_data {
+				DataMessage::Identity(board_id) => {
+					if established_sockets.contains(&incoming_address) {
+						warn!("{board_id} tried to re-establish previously established socket. Ignoring.");
 						continue;
 					}
-				};
-				pass!("Interpreted buffer.");
-	
-				task!("Decoding buffer...");
-				board_tx.send(match raw_data {
-					DataMessage::Identity(board_id) => {
-						if established_sockets.contains(&incoming_address) {
-							warn!("{board_id} tried to re-establish previously established socket. Ignoring.");
-							continue;
-						}
-						established_sockets.insert(incoming_address);
+					established_sockets.insert(incoming_address);
 
-						let value = DataMessage::Identity(String::from("flight-01"));
+					let value = DataMessage::Identity(String::from("flight-01"));
 
-						if let Err(e) = postcard::to_slice(&value, &mut buf) {
-							warn!("postcard returned this error when attempting to serialize DataMessage::Identity: {e}");
-							continue;
-						}
-
-						if let Err(e) = home_socket.send_to(&buf, incoming_address) {
-							fail!("Couldn't send DataMessage::Identity to ip {incoming_address}: {e}");
-						} else {
-							pass!("Sent DataMessage::Identity successfully!");
-						}
-	
-						Some(BoardCommunications::Init(board_id, incoming_address))
-					},
-					DataMessage::Sam(board_id, datapoints) => {
-						pass!("DataMessage::Sam found!");
-
-						Some(BoardCommunications::Sam(board_id, datapoints.to_vec()))
-					},
-					DataMessage::Bms(board_id) => {
-						pass!("DataMessage::Bms found!");
-
-						Some(BoardCommunications::Bsm(board_id))
-					},
-					_ => {
-						warn!("Unknown data found.");
-
-						None
+					if let Err(e) = postcard::to_slice(&value, &mut buf) {
+						warn!("postcard returned this error when attempting to serialize DataMessage::Identity: {e}");
+						continue;
 					}
-				}).expect("board_tx closed unexpectedly. This shouldn't happen.");
-			}
+
+					if let Err(e) = home_socket.send_to(&buf, incoming_address) {
+						fail!("Couldn't send DataMessage::Identity to ip {incoming_address}: {e}");
+					} else {
+						pass!("Sent DataMessage::Identity successfully!");
+					}
+
+					Some(BoardCommunications::Init(board_id, incoming_address))
+				},
+				DataMessage::Sam(board_id, datapoints) => {
+					pass!("DataMessage::Sam found!");
+
+					Some(BoardCommunications::Sam(board_id, datapoints.to_vec()))
+				},
+				DataMessage::Bms(board_id) => {
+					pass!("DataMessage::Bms found!");
+
+					Some(BoardCommunications::Bsm(board_id))
+				},
+				_ => {
+					warn!("Unknown data found.");
+
+					None
+				}
+			}).expect("board_tx closed unexpectedly. This shouldn't happen.");	
 		}
 	}
 }
