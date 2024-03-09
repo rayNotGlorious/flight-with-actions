@@ -9,6 +9,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(50);
 
 // TODO Replace BoardId stuff in sam.rs from everything except Identity.
 // TODO Implement continuous monitoring, where if timemout occurs, remove existence of sam board.
+// TODO Remove channel between listen() and start_switchboard()
 
 enum BoardCommunications {
 	Init(BoardId, SocketAddr),
@@ -105,6 +106,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 			};
 			
 
+			// make this cleaner
 			let mut sockets = sockets.lock().unwrap();
 			// update timers for all boards
 			for (board_id, timer) in timers.iter_mut() {
@@ -156,11 +158,11 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 			board_tx.send(match raw_data {
 				DataMessage::Identity(board_id) => {
 					if established_sockets.contains(&incoming_address) {
-						warn!("{board_id} tried to re-establish previously established board. Ignoring.");
-						continue;
+						warn!("{board_id} sent an Identity after it already was sent one.");
+					} else {
+						established_sockets.insert(incoming_address);
 					}
-					established_sockets.insert(incoming_address);
-
+					
 					let value = DataMessage::Identity(String::from("flight-01"));
 
 					let package = match postcard::to_slice(&value, &mut buf) {
