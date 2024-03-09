@@ -13,7 +13,7 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub sequence_tx: Sender<(BoardId, SamControlMessage)>
+	pub command_tx: Sender<(BoardId, SamControlMessage)>
 }
 
 #[derive(Debug)]
@@ -57,14 +57,14 @@ fn init() -> ProgramState {
 		.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
 	let vehicle_state = Arc::new(Mutex::new(VehicleState::new()));
 	let mappings: Arc<Mutex<Vec<NodeMapping>>> = Arc::new(Mutex::new(Vec::new()));
-	let sequence_tx = switchboard::run(home_socket, mappings.clone(), vehicle_state.clone())
+	let command_tx = switchboard::run(home_socket, mappings.clone(), vehicle_state.clone())
 		.expect("Couldn't start switchboard.");
 	
 	let shared = SharedState {
 		vehicle_state,
 		mappings,
 		server_address: Arc::new(Mutex::new(None)),
-		sequence_tx
+		command_tx
 	};
 
 	common::sequence::initialize(shared.mappings.clone());
