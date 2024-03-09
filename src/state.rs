@@ -1,17 +1,9 @@
-use bimap::BiHashMap;
-use crate::{forwarder, handler::create_device_handler, receiver::Receiver, SERVO_PORT};
 use common::{comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState}, sequence};
 use jeflog::{task, pass, warn, fail};
+use std::{fmt, time::Duration, io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{Arc, Mutex}, thread::{self, ThreadId}};
+use bimap::BiHashMap;
+use crate::{forwarder, switchboard, handler::create_device_handler, SERVO_PORT};
 use pyo3::Python;
-
-use std::{
-	fmt,
-	io::{self, Read},
-	net::{IpAddr, TcpStream},
-	sync::{Arc, Mutex},
-	thread::{self, ThreadId},
-	time::Duration
-};
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
 /// 
@@ -81,6 +73,7 @@ impl ProgramState {
 	}
 }
 
+const BIND_ADDRESS: (&str, u16) = ("0.0.0.0", 4573);
 impl fmt::Display for ProgramState {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
@@ -103,30 +96,33 @@ impl fmt::Display for ProgramState {
 }
 
 fn init() -> ProgramState {
+	let home_socket = UdpSocket::bind(BIND_ADDRESS)
+		.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
+	let vehicle_state = Arc::new(Mutex::new(VehicleState::new()));
+	let mappings: Arc<Mutex<Vec<NodeMapping>>> = Arc::new(Mutex::new(Vec::new()));
+	let command_tx = 
+		match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone()) {
+			Ok(command_tx) => command_tx,
+			Err(error) => {
+				fail!("Failed to create switchboard: {error}");
+				return ProgramState::Init;
+			}
+	};
+	
 	let shared = SharedState {
-		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
-		mappings: Arc::new(Mutex::new(Vec::new())),
+		vehicle_state,
+		mappings,
 		server_address: Arc::new(Mutex::new(None)),
 		triggers: Arc::new(Mutex::new(Vec::new())),
 		sequences: Arc::new(Mutex::new(BiHashMap::new())),
 	};
 
 	sequence::initialize(shared.mappings.clone());
-	sequence::set_device_handler(create_device_handler(&shared));
+	sequence::set_device_handler(create_device_handler(&shared, command_tx));
 
-	let receiver = Receiver::new(&shared).expect("failed to initialize receiver");
 	thread::spawn(check_triggers(&shared));
 
-	match receiver.receive_data() {
-		Ok(closure) => {
-			thread::spawn(closure);
-			ProgramState::ServerDiscovery { shared }
-		}
-		Err(error) => {
-			fail!("Failed to create data forwarding closure: {error}");
-			ProgramState::Init
-		}
-	}
+	ProgramState::ServerDiscovery { shared }
 }
 
 fn server_discovery(shared: SharedState) -> ProgramState {
