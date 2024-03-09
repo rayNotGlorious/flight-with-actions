@@ -61,7 +61,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 					}
 				},
 				Ok(Some(BoardCommunications::Bsm(board_id))) => {
-					warn!("Recieved BSM data from board {board_id}."); 
+					warn!("Recieved BSM data from board {board_id}"); 
 
 					if let Some(timer) = timers.get_mut(&board_id) {
 						*timer = 0;
@@ -70,7 +70,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 					}
 				},
 				Ok(None) => { warn!("Unknown data recieved from board!"); },
-				Err(TryRecvError::Disconnected) => { warn!("Lost connection to listen() channel. This isn't supposed to happen."); },
+				Err(TryRecvError::Disconnected) => { warn!("Lost connection to board_tx channel. This isn't supposed to happen."); },
 				Err(TryRecvError::Empty) => {}
 			};
 
@@ -93,7 +93,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 						fail!("Couldn't find socket with board ID {board_id} in sockets HashMap.");
 					}
 				},
-				Err(TryRecvError::Disconnected) => { warn!("Lost connection to control channel. This isn't supposed to happen."); },
+				Err(TryRecvError::Disconnected) => { warn!("Lost connection to control_tx channel. This isn't supposed to happen."); },
 				Err(TryRecvError::Empty) => {}
 			};
 			
@@ -125,7 +125,7 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 			let (size, incoming_address) = match home_socket.recv_from(&mut buf) {
 				Ok(tuple) => tuple,
 				Err(e) => {
-					warn!("Error in receiving data from home_socket: {e}.");
+					warn!("Error in receiving data from home_socket: {e}");
 					continue;
 				}
 			};
@@ -144,7 +144,7 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 			board_tx.send(match raw_data {
 				DataMessage::Identity(board_id) => {
 					if established_sockets.contains(&incoming_address) {
-						warn!("{board_id} tried to re-establish previously established socket. Ignoring.");
+						warn!("{board_id} tried to re-establish previously established board. Ignoring.");
 						continue;
 					}
 					established_sockets.insert(incoming_address);
@@ -159,18 +159,18 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 					if let Err(e) = home_socket.send_to(&buf, incoming_address) {
 						fail!("Couldn't send DataMessage::Identity to ip {incoming_address}: {e}");
 					} else {
-						pass!("Sent DataMessage::Identity successfully!");
+						pass!("Sent DataMessage::Identity successfully.");
 					}
 
 					Some(BoardCommunications::Init(board_id, incoming_address))
 				},
 				DataMessage::Sam(board_id, datapoints) => {
-					pass!("DataMessage::Sam found!");
+					pass!("Received DataMessage::Sam from {board_id}");
 
 					Some(BoardCommunications::Sam(board_id, datapoints.to_vec()))
 				},
 				DataMessage::Bms(board_id) => {
-					pass!("DataMessage::Bms found!");
+					pass!("Received DataMessage::Bms from {board_id}");
 
 					Some(BoardCommunications::Bsm(board_id))
 				},
@@ -209,7 +209,7 @@ fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce()
 			
 			match new_board_rx.try_recv() {
 				Ok(socket) => { addresses.push(socket) },
-				Err(TryRecvError::Disconnected) => { warn!("Lost connection to listen() channel. This isn't supposed to happen."); },
+				Err(TryRecvError::Disconnected) => { warn!("Lost connection to new_board_tx. This isn't supposed to happen."); },
 				Err(TryRecvError::Empty) => {}
 			};
 	
