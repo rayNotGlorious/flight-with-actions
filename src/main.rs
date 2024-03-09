@@ -1,4 +1,5 @@
 mod forwarder;
+mod handler;
 mod state;
 mod switchboard;
 
@@ -11,7 +12,7 @@ fn main() {
 	let mut state = ProgramState::Init;
 
 	loop {
-		pass!("Transitioned state: {:#?}", state);
+		pass!("Transitioned to state: {state}");
 		state = state.next();
 	}
 }

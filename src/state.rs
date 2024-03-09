@@ -1,8 +1,9 @@
-use common::comm::{FlightControlMessage, SamControlMessage, NodeMapping, Sequence, VehicleState, BoardId};
+use common::{comm::{FlightControlMessage, SamControlMessage, NodeMapping, Sequence, VehicleState, BoardId}, sequence};
 use jeflog::{task, pass, warn, fail};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::Sender, Arc, Mutex}, thread};
-
-use crate::{forwarder, switchboard, SERVO_PORT};
+use std::{fmt, time::Duration, io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::Sender, Arc, Mutex}, thread::{self, ThreadId}};
+use bimap::BiHashMap;
+use crate::{forwarder, switchboard, handler::create_device_handler, SERVO_PORT};
+use pyo3::Python;
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
 /// 
@@ -13,32 +14,55 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub command_tx: Sender<(BoardId, SamControlMessage)>
+	pub command_tx: Sender<(BoardId, SamControlMessage)>,
+	pub triggers: Arc<Mutex<Vec<common::comm::Trigger>>>,
+	pub sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>,
 }
+
 
 #[derive(Debug)]
 pub enum ProgramState {
+	/// The initialization state, which primarily spawns background threads
+	/// and transitions to the `ServerDiscovery` state.
 	Init,
+	
+	/// State which loops through potential server hostnames until locating the
+	/// server and connecting to it via TCP.
 	ServerDiscovery {
+		/// The shared flight state.
 		shared: SharedState,
 	},
+
+	/// State which waits for an operator command, such as setting mappings or
+	/// running a sequence.
 	WaitForOperator {
 		server_socket: TcpStream,
 
+		/// The shared flight state.
 		shared: SharedState,
 	},
+
+	/// State which spawns a thread to run a sequence before returning to the
+	/// `WaitForOperator` state.
 	RunSequence {
 		server_socket: Option<TcpStream>,
+
+		/// A full description of the sequence to run.
 		sequence: Sequence,
 
+		/// The shared flight state.
 		shared: SharedState,
 	},
+
+	/// The abort state, which safes the system and returns to `Init`.
 	Abort {
+		/// The shared flight state.
 		shared: SharedState
 	},
 }
 
 impl ProgramState {
+	/// Perform transition to the next state, returning the next state. 
 	pub fn next(self) -> Self {
 		match self {
 			ProgramState::Init => init(),
@@ -51,23 +75,54 @@ impl ProgramState {
 }
 
 const BIND_ADDRESS: (&str, u16) = ("0.0.0.0", 4573);
+impl fmt::Display for ProgramState {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Init => write!(f, "Init"),
+			Self::ServerDiscovery { .. } => write!(f, "ServerDiscovery"),
+			Self::WaitForOperator { server_socket, .. } => {
+				let peer_address = server_socket
+					.peer_addr()
+					.map(|addr| addr.to_string())
+					.unwrap_or("unknown".to_owned());
+
+				write!(f, "WaitForOperator(server = {peer_address})")
+			},
+			Self::RunSequence { sequence, .. } => {
+				write!(f, "RunSequence(name = {})", sequence.name)
+			},
+			Self::Abort { .. } => write!(f, "Abort"),
+		}
+	}
+}
 
 fn init() -> ProgramState {
 	let home_socket = UdpSocket::bind(BIND_ADDRESS)
 		.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
 	let vehicle_state = Arc::new(Mutex::new(VehicleState::new()));
 	let mappings: Arc<Mutex<Vec<NodeMapping>>> = Arc::new(Mutex::new(Vec::new()));
-	let command_tx = switchboard::run(home_socket, mappings.clone(), vehicle_state.clone())
-		.expect("Couldn't start switchboard.");
+	let command_tx = 
+		match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone()) {
+			Ok(command_tx) => command_tx,
+			Err(error) => {
+				fail!("Failed to create switchboard: {error}");
+				return ProgramState::Init;
+			}
+	};
 	
 	let shared = SharedState {
 		vehicle_state,
 		mappings,
 		server_address: Arc::new(Mutex::new(None)),
-		command_tx
+		command_tx,
+		triggers: Arc::new(Mutex::new(Vec::new())),
+		sequences: Arc::new(Mutex::new(BiHashMap::new())),
 	};
 
-	common::sequence::initialize(shared.mappings.clone());
+	sequence::initialize(shared.mappings.clone());
+	sequence::set_device_handler(create_device_handler(&shared));
+
+	thread::spawn(check_triggers(&shared));
 
 	ProgramState::ServerDiscovery { shared }
 }
@@ -98,7 +153,7 @@ fn server_discovery(shared: SharedState) -> ProgramState {
 }
 
 fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> ProgramState {
-	let mut buffer = vec![0; 1024];
+	let mut buffer = vec![0; 1_000_000];
 
 	match server_socket.read(&mut buffer) {
 		Ok(size) => {
@@ -123,8 +178,26 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 								shared,
 							}
 						},
-						FlightControlMessage::Trigger(_) => {
-							warn!("Received control message setting trigger. Triggers not yet supported.");
+						FlightControlMessage::Trigger(trigger) => {
+							pass!("Received trigger from server: {trigger:#?}");
+							
+							// update existing trigger if one has the same name
+							// otherwise, add a new trigger to the vec
+							let mut triggers = shared.triggers.lock().unwrap();
+
+							let existing = triggers
+								.iter()
+								.position(|t| t.name == trigger.name);
+
+							if let Some(index) = existing {
+								triggers[index] = trigger;
+							} else {
+								triggers.push(trigger);
+							}
+
+							// necessary to allow passing 'shared' back to WaitForOperator
+							drop(triggers);
+
 							ProgramState::WaitForOperator { server_socket, shared }
 						},
 					}
@@ -146,14 +219,27 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 }
 
 fn run_sequence(server_socket: Option<TcpStream>, sequence: Sequence, shared: SharedState) -> ProgramState {
-	common::sequence::run(sequence);
-
-	// differentiates between an abort sequence and a normal sequence.
-	// abort does not have access to the server socket, so it gives None for it.
-	// if an abort is run, then we need to return to ServerDiscovery to reconnect.
 	if let Some(server_socket) = server_socket {
+		let sequence_name = sequence.name.clone();
+
+		let thread_id = thread::spawn(|| sequence::run(sequence))
+			.thread()
+			.id();
+
+		shared.sequences
+			.lock()
+			.unwrap()
+			.insert(sequence_name, thread_id);
+
 		ProgramState::WaitForOperator { server_socket, shared }
 	} else {
+		shared.sequences
+			.lock()
+			.unwrap()
+			.clear();
+
+		sequence::run(sequence);
+
 		ProgramState::ServerDiscovery { shared }
 	}
 }
@@ -166,5 +252,49 @@ fn abort(shared: SharedState) -> ProgramState {
 		},
 		server_socket: None,
 		shared,
+	}
+}
+
+fn check_triggers(shared: &SharedState) -> impl FnOnce() -> () {
+	let triggers = shared.triggers.clone();
+
+	// return closure instead of using the function itself because of borrow-checking
+	// rules regarding moving the 'triggers' reference across closure bounds
+	move || {
+		loop {
+			let mut triggers = triggers.lock().unwrap();
+
+			for trigger in triggers.iter_mut() {
+				// perform check by running condition as Python script and getting truth value
+				let check = Python::with_gil(|py| {
+					py.eval(&trigger.condition, None, None)
+						.and_then(|condition| {
+							condition.extract::<bool>()
+						})
+				});
+
+				// checks if the condition evaluated true
+				if check.as_ref().is_ok_and(|c| *c) {
+					let sequence = Sequence {
+						name: format!("trigger_{}", trigger.name),
+						script: trigger.script.clone(),
+					};
+
+					// run sequence in the same thread so there is no rapid-fire
+					// sequence dispatches if a trigger is tripped
+					// note: this is intentionally blocking
+					common::sequence::run(sequence);
+				}
+
+				if let Err(error) = check {
+					fail!("Trigger '{}' raised exception during execution: {error}", trigger.name);
+					trigger.active = false;
+				}
+			}
+
+			// drop triggers before waiting so the lock isn't held over the wait
+			drop(triggers);
+			thread::sleep(Duration::from_millis(10));
+		}
 	}
 }
