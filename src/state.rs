@@ -1,6 +1,6 @@
-use common::{comm::{FlightControlMessage, SamControlMessage, NodeMapping, Sequence, VehicleState, BoardId}, sequence};
+use common::{comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState}, sequence};
 use jeflog::{task, pass, warn, fail};
-use std::{fmt, time::Duration, io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::Sender, Arc, Mutex}, thread::{self, ThreadId}};
+use std::{fmt, time::Duration, io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{Arc, Mutex}, thread::{self, ThreadId}};
 use bimap::BiHashMap;
 use crate::{forwarder, switchboard, handler::create_device_handler, SERVO_PORT};
 use pyo3::Python;
@@ -14,7 +14,6 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub command_tx: Sender<(BoardId, SamControlMessage)>,
 	pub triggers: Arc<Mutex<Vec<common::comm::Trigger>>>,
 	pub sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>,
 }
@@ -114,13 +113,12 @@ fn init() -> ProgramState {
 		vehicle_state,
 		mappings,
 		server_address: Arc::new(Mutex::new(None)),
-		command_tx,
 		triggers: Arc::new(Mutex::new(Vec::new())),
 		sequences: Arc::new(Mutex::new(BiHashMap::new())),
 	};
 
 	sequence::initialize(shared.mappings.clone());
-	sequence::set_device_handler(create_device_handler(&shared));
+	sequence::set_device_handler(create_device_handler(&shared, command_tx));
 
 	thread::spawn(check_triggers(&shared));
 

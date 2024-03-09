@@ -2,6 +2,8 @@ use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, syn
 use common::comm::{BoardId, ChannelType, CompositeValveState, DataMessage, DataPoint, Measurement, NodeMapping, SamControlMessage, SensorType, Sequence, Unit, ValveState, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
+use crate::CommandSender;
+
 /// Milliseconds of inactivity before we sent a heartbeat
 const BOARD_TIMEOUT_MS: u32 = 50;
 const HEARTBEAT_INTERVAL_MS: u32 = 50;
@@ -13,7 +15,7 @@ enum BoardCommunications {
 }
 
 /// One-shot thread spawner, begins switchboard logic.
-pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>) -> Result<Sender<(BoardId, SamControlMessage)>, io::Error> {
+pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>) -> Result<CommandSender, io::Error> {
 	let (tx, rx) = mpsc::channel::<(BoardId, SamControlMessage)>();
 	thread::spawn(start_switchboard(home_socket, mappings, vehicle_state, rx)?);
 	Ok(tx)
@@ -75,7 +77,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 			// send sam control message to SAM
 			match control_rx.try_recv() {
 				Ok((board_id, control_message)) => 'b: {
-					let mut buf: Vec<u8> = vec![0; 1024];
+					let mut buf = [0; 1024];
 
 					if let Err(e) = postcard::to_slice(&control_message, &mut buf) {
 						fail!("postcard returned this error when attempting to serialize control message {:#?}: {e}", control_message);

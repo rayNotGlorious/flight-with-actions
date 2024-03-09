@@ -1,16 +1,15 @@
-use common::{comm::{NodeMapping, SamControlMessage, ValveState, VehicleState}, sequence::{AbortError, DeviceAction}};
-use jeflog::fail;
+use common::{comm::{BoardId, NodeMapping, SamControlMessage, ValveState, VehicleState}, sequence::{AbortError, DeviceAction}};
+use jeflog::{task, fail, pass};
 use pyo3::{types::PyNone, IntoPy, PyErr, PyObject, Python, ToPyObject};
-use std::{net::{ToSocketAddrs, UdpSocket}, sync::Mutex, thread};
+use std::{sync::{mpsc::Sender, Mutex}, thread};
 
 use crate::state::SharedState;
 
-pub fn create_device_handler(shared: &SharedState) -> impl Fn(&str, DeviceAction) -> PyObject {
+pub fn create_device_handler(shared: &SharedState, command_tx: Sender<(BoardId, SamControlMessage)>) -> impl Fn(&str, DeviceAction) -> PyObject {
 	let vehicle_state = shared.vehicle_state.clone();
 	let sequences = shared.sequences.clone();
 	let mappings = shared.mappings.clone();
-
-	let sam_socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+	let tx = command_tx.clone();
 
 	move |device, action| {
 		let thread_id = thread::current().id();
@@ -27,7 +26,7 @@ pub fn create_device_handler(shared: &SharedState) -> impl Fn(&str, DeviceAction
 		match action {
 			DeviceAction::ReadSensor => read_sensor(device, &vehicle_state),
 			DeviceAction::ActuateValve { state } => {
-				actuate_valve(device, state, &mappings, &sam_socket);
+				actuate_valve(device, state, &mappings, &tx);
 				Python::with_gil(|py| PyNone::get(py).to_object(py))
 			},
 		}
@@ -52,7 +51,7 @@ fn read_sensor(name: &str, vehicle_state: &Mutex<VehicleState>) -> PyObject {
 	})
 }
 
-fn actuate_valve(name: &str, state: ValveState, mappings: &Mutex<Vec<NodeMapping>>, sam_socket: &UdpSocket) {
+fn actuate_valve(name: &str, state: ValveState, mappings: &Mutex<Vec<NodeMapping>>, command_tx: &Sender<(BoardId, SamControlMessage)>) {
 	let mappings = mappings.lock().unwrap();
 
 	let Some(mapping) = mappings.iter().find(|m| m.text_id == name) else {
@@ -66,26 +65,10 @@ fn actuate_valve(name: &str, state: ValveState, mappings: &Mutex<Vec<NodeMapping
 
 	let message = SamControlMessage::ActuateValve { channel: mapping.channel, powered };
 
-	let address = format!("{}.local:8378", mapping.board_id)
-		.to_socket_addrs()
-		.ok()
-		.and_then(|mut addrs| addrs.find(|addr| addr.is_ipv4()));
-
-	if let Some(address) = address {
-		let serialized = match postcard::to_allocvec(&message) {
-			Ok(serialized) => serialized,
-			Err(error) => {
-				fail!("Failed to actuate valve: {error}");
-				return;
-			},
-		};
-
-		if let Err(error) = sam_socket.send_to(&serialized, address) {
-			fail!("Failed to actuate valve: {error}");
-			return;
-		}
-	} else {
-		fail!("Failed to actuate valve: address of board '{}' not found.", mapping.board_id);
+	task!("Sending SamControlMessage::ActuateValve to {}", mapping.board_id);
+	match command_tx.send((mapping.board_id.clone(), message)) {
+		Ok(()) => pass!("Command sent!"),
+		Err(e) => fail!("Command couldn't be sent: {e}")
 	}
 }
 
