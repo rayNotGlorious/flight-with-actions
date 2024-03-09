@@ -1,11 +1,14 @@
 use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::{Duration, Instant}};
-use common::comm::{BoardId, ChannelType, CompositeValveState, DataMessage, DataPoint, Measurement, NodeMapping, SamControlMessage, SensorType, Sequence, Unit, ValveState, VehicleState};
+use common::comm::{BoardId, ChannelType, CompositeValveState, DataMessage, DataPoint, Measurement, NodeMapping, SamControlMessage, SensorType, Unit, ValveState, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
 use crate::CommandSender;
 
 /// Milliseconds of inactivity before we sent a heartbeat
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(50);
+
+// TODO Replace BoardId stuff in sam.rs from everything except Identity.
+// TODO Implement continuous monitoring, where if timemout occurs, remove existence of sam board.
 
 enum BoardCommunications {
 	Init(BoardId, SocketAddr),
@@ -24,29 +27,27 @@ pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehic
 fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>, control_rx: Receiver<(BoardId, SamControlMessage)>) -> Result<impl FnOnce() -> (), io::Error> {
 	let mappings = mappings.clone();
 	let vehicle_state = vehicle_state.clone();
-	let mut sockets: HashMap<BoardId, SocketAddr> = HashMap::new();
+	let sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>> = Arc::new(Mutex::new(HashMap::new()));
 	let mut timers: HashMap<BoardId, Instant> = HashMap::new();
 	let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
-	let (new_board_tx, new_board_rx) = mpsc::channel::<SocketAddr>();
-
+	
 	task!("Cloning sockets...");
 	let listen_socket = home_socket.try_clone()?;
 	let pulse_socket = home_socket.try_clone()?;
 	pass!("Sockets cloned!");
 
 	thread::spawn(listen(listen_socket, board_tx));
-	thread::spawn(pulse(pulse_socket, new_board_rx));
+	thread::spawn(pulse(pulse_socket, sockets.clone()));
 
 	Ok(move || {
 		task!("Switchboard started.");
 
-		'a: loop {
+		let mut remove_boards: Vec<BoardId> = Vec::new();
+		loop {
 			// interpret data from SAM board
 			match board_rx.try_recv() {
 				Ok(Some(BoardCommunications::Init(board_id, address))) => {
-					// thread::sleep(Duration::from_millis(100));
-					new_board_tx.send(address).expect("Can't find pulse for new board. This shouldn't happen.");
-					
+					let mut sockets = sockets.lock().unwrap();
 					sockets.insert(board_id.to_string(), address);
 
 					timers.insert(board_id, Instant::now());
@@ -87,7 +88,10 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 						}
 					};
 					
+					let sockets = sockets.lock().unwrap();
 					if let Some(socket) = sockets.get(&board_id) {
+						let socket = (socket.ip(), 8378);
+
 						match home_socket.send_to(control_message, socket) {
 							Ok(size) => pass!("Sent {size} bits of control message successfully!"),
 							Err(e) => fail!("Couldn't send control message to board {board_id} via socket {:#?}: {e}", socket),
@@ -100,16 +104,24 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 				Err(TryRecvError::Empty) => {}
 			};
 			
+
+			let mut sockets = sockets.lock().unwrap();
 			// update timers for all boards
 			for (board_id, timer) in timers.iter_mut() {
 				if Instant::now() - *timer > HEARTBEAT_INTERVAL {
 					abort(format!("{board_id} is unresponsive. Aborting..."));
-					break 'a;
+					sockets.remove(board_id);
+
+					remove_boards.push(board_id.clone());
 				}
 			}
-		}
 
-		fail!("Detected disconnection. Shutting down switchboard...");
+			for board in &remove_boards {
+				timers.remove(board);
+			}
+
+			remove_boards.clear();
+		}
 	})
 }
 
@@ -182,14 +194,15 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 
 					None
 				}
-			}).expect("board_tx closed unexpectedly. This shouldn't happen.");	
+			}).expect("board_rx closed unexpectedly. This shouldn't happen.");	
 		}
 	}
 }
 
-fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce() -> () {
+fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>) -> impl FnOnce() -> () {
+	let sockets = sockets.clone();
+
 	move || {
-		let mut addresses: Vec<SocketAddr> = Vec::new();
 		let mut clock: Instant = Instant::now();
 		let mut buf: Vec<u8> = vec![0; 1024];
 
@@ -201,23 +214,17 @@ fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce()
 			}
 		};
 
-		'a: loop {
+		loop {
 			if Instant::now() - clock > HEARTBEAT_INTERVAL {
-				for address in addresses.iter() {
-					if let Err(e) = socket.send_to(heartbeat, address) {
+				let sockets = sockets.lock().unwrap();
+				for address in sockets.iter() {
+					if let Err(e) = socket.send_to(heartbeat, address.1) {
 						abort(format!("Couldn't send heartbeat to socket {:#?}: {e}", socket));
-						break 'a;
 					}
 				}
 
 				clock = Instant::now();
 			}
-			
-			match new_board_rx.try_recv() {
-				Ok(socket) => { addresses.push(socket) },
-				Err(TryRecvError::Disconnected) => { warn!("Lost connection to new_board_tx. This isn't supposed to happen."); },
-				Err(TryRecvError::Empty) => {}
-			};
 		}
 	}
 }
@@ -225,10 +232,14 @@ fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce()
 fn abort(reason: String) {
 	fail!("{}", reason);
 
+	
+	warn!("I would abort, but aborts are off..."); // TODO ask jeff abt this
+
+	/*
 	common::sequence::run(Sequence {
 		name: "abort".to_owned(),
 		script: "abort()".to_owned(),
-	});
+	});*/
 }
 
 fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex<Vec<NodeMapping>>>, board_id: BoardId, data_points: Vec<DataPoint>) {
