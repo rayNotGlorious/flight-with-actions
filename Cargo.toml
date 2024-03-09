@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 bimap = "0.6.3"
 common = { git = "https://github.com/gt-space/common", features = ["sequences"] }
-dns-lookup = "2.0.4"
 jeflog = "0.1.0"
 postcard = { version = "1.0.8", features = ["alloc"] }
 pyo3 = "0.20"
