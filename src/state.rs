@@ -66,7 +66,7 @@ fn init() -> ProgramState {
 	sequence::initialize(shared.mappings.clone());
 	sequence::set_device_handler(create_device_handler(&shared));
 
-	let receiver = Receiver::new(&shared);
+	let receiver = Receiver::new(&shared).expect("failed to initialize receiver");
 	thread::spawn(check_triggers(&shared));
 
 	match receiver.receive_data() {
@@ -79,7 +79,6 @@ fn init() -> ProgramState {
 			ProgramState::Init
 		}
 	}
-
 }
 
 fn server_discovery(shared: SharedState) -> ProgramState {
