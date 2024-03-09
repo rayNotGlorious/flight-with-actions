@@ -266,7 +266,7 @@ fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex
 			let mut text_id = mapping.text_id.clone();
 
 			let measurement = match mapping.sensor_type {
-				SensorType::LoadCell | SensorType::RailVoltage => Measurement { value: data_point.value, unit: Unit::Volts },
+				SensorType::RailVoltage => Measurement { value: data_point.value, unit: Unit::Volts },
 				SensorType::Rtd | SensorType::Tc => Measurement { value: data_point.value, unit: Unit::Kelvin },
 				SensorType::RailCurrent => Measurement { value: data_point.value, unit: Unit::Amps },
 				SensorType::Pt => {
@@ -284,6 +284,21 @@ fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex
 						// if no PT ratings are set, default to displaying raw voltage
 						value = data_point.value;
 						unit = Unit::Volts;
+					}
+
+					Measurement { value, unit }
+				},
+				SensorType::LoadCell => {
+					// if no load cell mappings are set, default to these values
+					let mut value = data_point.value;
+					let mut unit = Unit::Volts;
+
+					// apply linear transformations to load cell channel if the max and min are supplied by the mappings.
+					// otherwise, default back to volts.
+					if let (Some(max), Some(min)) = (mapping.max, mapping.min) {
+						// formula for converting voltage into pounds for our load cells
+						value = (max - min) / 0.03 * (value + 0.015) + min - mapping.calibrated_offset;
+						unit = Unit::Pounds;
 					}
 
 					Measurement { value, unit }
