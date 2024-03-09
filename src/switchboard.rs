@@ -80,13 +80,16 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 				Ok((board_id, control_message)) => 'b: {
 					let mut buf = [0; 1024];
 
-					if let Err(e) = postcard::to_slice(&control_message, &mut buf) {
-						fail!("postcard returned this error when attempting to serialize control message {:#?}: {e}", control_message);
-						break 'b;
-					}
+					let control_message = match postcard::to_slice(&control_message, &mut buf) {
+						Ok(package) =>  package,
+						Err(e) => {
+							fail!("postcard returned this error when attempting to serialize control message {:#?}: {e}", control_message);
+							break 'b;
+						}
+					};
 					
 					if let Some(socket) = sockets.get(&board_id) {
-						match home_socket.send_to(&buf, socket) {
+						match home_socket.send_to(control_message, socket) {
 							Ok(size) => pass!("Sent {size} bits of control message successfully!"),
 							Err(e) => fail!("Couldn't send control message to board {board_id} via socket {:#?}: {e}", socket),
 						};
@@ -194,15 +197,18 @@ fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce()
 		let mut clock: u32 = 0;
 		let mut buf: Vec<u8> = vec![0; 1024];
 
-		if let Err(e) = postcard::to_slice(&DataMessage::FlightHeartbeat, &mut buf) {
-			abort(format!("postcard returned this error when attempting to serialize DataMessage::FlightHeartbeat: {e}"));
-			return;
-		}
-		
+		let heartbeat = match postcard::to_slice(&DataMessage::FlightHeartbeat, &mut buf) {
+			Ok(package) => package,
+			Err(e) => {
+				abort(format!("postcard returned this error when attempting to serialize DataMessage::FlightHeartbeat: {e}"));
+				return;
+			}
+		};
+
 		'a: loop {
 			if clock % HEARTBEAT_INTERVAL_MS == 0 {
 				for address in addresses.iter() {
-					if let Err(e) = socket.send_to(&buf, address) {
+					if let Err(e) = socket.send_to(heartbeat, address) {
 						abort(format!("Couldn't send heartbeat to socket {:#?}: {e}", socket));
 						break 'a;
 					}
