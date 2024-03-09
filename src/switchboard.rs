@@ -103,7 +103,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 			// update timers for all boards
 			for (board_id, timer) in timers.iter_mut() {
 				if Instant::now() - *timer > HEARTBEAT_INTERVAL {
-					abort(board_id.to_string());
+					abort(format!("{board_id} is unresponsive. Aborting..."));
 					break 'a;
 				}
 			}
