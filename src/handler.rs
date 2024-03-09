@@ -1,17 +1,29 @@
-use common::{comm::{NodeMapping, SamControlMessage, ValveState, VehicleState}, sequence::DeviceAction};
+use common::{comm::{NodeMapping, SamControlMessage, ValveState, VehicleState}, sequence::{AbortError, DeviceAction}};
 use jeflog::fail;
-use pyo3::{types::PyNone, IntoPy, PyObject, Python, ToPyObject};
-use std::{net::{ToSocketAddrs, UdpSocket}, sync::Mutex};
+use pyo3::{types::PyNone, IntoPy, PyErr, PyObject, Python, ToPyObject};
+use std::{net::{ToSocketAddrs, UdpSocket}, sync::Mutex, thread};
 
 use crate::state::SharedState;
 
 pub fn create_device_handler(shared: &SharedState) -> impl Fn(&str, DeviceAction) -> PyObject {
 	let vehicle_state = shared.vehicle_state.clone();
+	let sequences = shared.sequences.clone();
 	let mappings = shared.mappings.clone();
 
 	let sam_socket = UdpSocket::bind("0.0.0.0:0").unwrap();
 
 	move |device, action| {
+		let thread_id = thread::current().id();
+		let sequences = sequences.lock().unwrap();
+		
+		if sequences.get_by_right(&thread_id).is_none() {
+			Python::with_gil(|py| {
+				AbortError::new_err("aborting sequence").restore(py);
+				assert!(PyErr::occurred(py));
+				drop(PyErr::fetch(py));
+			})
+		}
+
 		match action {
 			DeviceAction::ReadSensor => read_sensor(device, &vehicle_state),
 			DeviceAction::ActuateValve { state } => {

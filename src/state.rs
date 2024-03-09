@@ -1,8 +1,9 @@
-use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState};
+use bimap::BiHashMap;
+use common::{comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState}, sequence};
 use jeflog::{task, pass, warn, fail};
-use std::{collections::HashMap, io::{self, Read}, net::{IpAddr, TcpStream},sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, thread, thread::JoinHandle,};
+use std::{io::{self, Read}, net::{IpAddr, TcpStream},sync::{Arc, Mutex}, thread::{self, ThreadId}};
 
-use crate::{forwarder, receiver::Receiver, SERVO_PORT};
+use crate::{forwarder, handler::create_device_handler, receiver::Receiver, SERVO_PORT};
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
 /// 
@@ -13,8 +14,7 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub sequence_threads: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
-	pub abort_signal: Arc<AtomicBool>,
+	pub sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>,
 }
 
 #[derive(Debug)]
@@ -56,12 +56,13 @@ fn init() -> ProgramState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
 		mappings: Arc::new(Mutex::new(Vec::new())),
 		server_address: Arc::new(Mutex::new(None)),
-		sequence_threads: Arc::new(Mutex::new(HashMap::new())),
-		abort_signal: Arc::new(AtomicBool::new(false)),
+		sequences: Arc::new(Mutex::new(BiHashMap::new())),
 	};
 
-	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
-	 let receiver = loop {
+	sequence::initialize(shared.mappings.clone());
+	sequence::set_device_handler(create_device_handler(&shared));
+
+	let receiver = loop {
 		match Receiver::new(&shared) {
 			Ok(initalized) => break initalized,
 			Err(error) => {
@@ -158,47 +159,26 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 }
 
 fn run_sequence(server_socket: Option<TcpStream>, sequence: Sequence, shared: SharedState) -> ProgramState {
-	// Immediately check for an abort signal before proceeding
-	if shared.abort_signal.load(Ordering::SeqCst) {
-		// If an abort has been signaled, skip running the new sequence
-		warn!("Abort signal detected. Skipping sequence execution.");
-		return ProgramState::Abort { shared };
-	}
-
 	if let Some(server_socket) = server_socket {
-		let sequence_name = sequence.name.clone();
-		let abort_signal_clone = shared.abort_signal.clone();
-		// Clone sequence_name for use inside the thread closure
-		let sequence_name_clone = sequence_name.clone();
+		let thread_id = thread::spawn(|| sequence::run(sequence))
+			.thread()
+			.id();
 
-		// Spawn a new thread for running the sequence
-		let handle = thread::spawn(move || {
-			// Here, before performing any operation that might take time or interact with external components,
-			// you should check the abort signal. This is a simplified placeholder for where you might interact with external systems.
-			if abort_signal_clone.load(Ordering::SeqCst) {
-				warn!("Abort signal detected. Terminating sequence: {}", sequence_name_clone);
-				return;
-			}
-			common::sequence::run(sequence);
+		shared.sequences
+			.lock()
+			.unwrap()
+			.insert(sequence.name.clone(), thread_id);
 
-			// Example of hypothetically periodically checking the abort signal in a loop (if applicable)
-			// for _ in some_iterable {
-			//     if abort_signal_clone.load(Ordering::SeqCst) {
-			//         warn!("Abort signal detected during sequence. Terminating: {}", sequence_name_clone);
-			//         return;
-			//     }
-			//     // Perform operation
-			// }
-		});
-
-		shared.sequence_threads.lock().unwrap().insert(sequence_name, handle);
-
-		ProgramState::WaitForOperator {
-			server_socket,
-			shared,
-		}
+		ProgramState::WaitForOperator { server_socket, shared }
 	} else {
-		ProgramState::Abort { shared }
+		shared.sequences
+			.lock()
+			.unwrap()
+			.clear();
+
+		sequence::run(sequence);
+
+		ProgramState::ServerDiscovery { shared }
 	}
 }
 
