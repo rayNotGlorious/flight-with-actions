@@ -1,24 +1,111 @@
-use std::{collections::{HashMap, HashSet}, net::UdpSocket, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Duration};
+use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Duration};
 use common::comm::{BoardId, ChannelType, DataMessage, DataPoint, Measurement, NodeMapping, Sequence, Unit, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
 /// Milliseconds of inactivity before we sent a heartbeat
-const HEARTBEAT_TIMEOUT_MS: u32 = 200;
-/// How many heartbeats should be sent before we consider the data board to be disconnected
-const HEARTBEAT_MAX_TIMEOUT: u8 = 3;
+const BOARD_TIMEOUT_MS: u32 = 50;
+const HEARTBEAT_INTERVAL_MS: u32 = 50;
 
 enum BoardCommunications {
-  Init(BoardId, UdpSocket),
-  HeartbeatAck(BoardId),
+  Init(BoardId, SocketAddr),
   Sam(BoardId, Vec<DataPoint>),
   Bsm(BoardId)
 }
 
 /// One-shot thread spawner, begins switchboard logic.
-pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>) -> Sender<(BoardId, Sequence)> {
+pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>) -> Result<Sender<(BoardId, Sequence)>, io::Error> {
   let (tx, rx) = mpsc::channel::<(BoardId, Sequence)>();
-  thread::spawn(start_switchboard(home_socket, mappings, vehicle_state, rx));
-  tx
+  thread::spawn(start_switchboard(home_socket, mappings, vehicle_state, rx)?);
+  Ok(tx)
+}
+
+/// owns sockets and SharedState, changes must be sent via mpsc channel
+fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>, sequence_rx: Receiver<(BoardId, Sequence)>) -> Result<impl FnOnce() -> (), io::Error> {
+  let mappings = mappings.clone();
+  let vehicle_state = vehicle_state.clone();
+  let mut sockets: HashMap<BoardId, SocketAddr> = HashMap::new();
+  let mut timers: HashMap<BoardId, u32> = HashMap::new();
+  let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
+  let (new_board_tx, new_board_rx) = mpsc::channel::<SocketAddr>();
+
+  task!("Cloning sockets...");
+  let listen_socket = home_socket.try_clone()?;
+  let pulse_socket = home_socket.try_clone()?;
+  pass!("Sockets cloned!");
+
+  thread::spawn(listen(listen_socket, board_tx));
+  thread::spawn(pulse(pulse_socket, new_board_rx));
+
+  Ok(move || {
+    task!("Switchboard started.");
+
+    'a: loop {
+      match board_rx.try_recv() {
+        Ok(Some(BoardCommunications::Init(board_id, address))) => { 
+          new_board_tx.send(address).expect("Can't find pulse for new board. This shouldn't happen.");
+          
+          sockets.insert(board_id.to_string(), address);
+
+          timers.insert(board_id, 0);
+        },
+        Ok(Some(BoardCommunications::Sam(board_id, datapoints)))  => {
+          process_sam_data(vehicle_state.clone(), mappings.clone(), board_id.clone(), datapoints);
+          
+          if let Some(timer) = timers.get_mut(&board_id) {
+            *timer = 0;
+          } else {
+            warn!("Cannot find timer for board with id of {board_id}!");
+          }
+        },
+        Ok(Some(BoardCommunications::Bsm(board_id))) => {
+          warn!("Recieved BSM data from board {board_id}."); 
+
+          if let Some(timer) = timers.get_mut(&board_id) {
+            *timer = 0;
+          } else {
+            warn!("Cannot find timer for board with id of {board_id}!");
+          }
+        },
+        Ok(None) => { warn!("Unknown data recieved from board!"); },
+        Err(TryRecvError::Disconnected) => { warn!("Lost connection to listen() channel. This isn't supposed to happen."); },
+        Err(TryRecvError::Empty) => {}
+      };
+
+      match sequence_rx.try_recv() {
+        Ok((board_id, sequence)) => 'b: {
+          let mut buf: Vec<u8> = vec![0; 1024];
+
+          if let Err(e) = postcard::to_slice(&sequence, &mut buf) {
+            fail!("postcard returned this error when attempting to serialize sequence {:#?}: {e}", sequence);
+            break 'b;
+          }
+          
+          if let Some(socket) = sockets.get(&board_id) {
+            match home_socket.send_to(&buf, socket) {
+              Ok(size) => pass!("Sent {size} bits of sequence successfully!"),
+              Err(e) => fail!("Couldn't send sequence to socket {:#?}: {e}", socket),
+            };
+          } else {
+            fail!("Couldn't find socket with board ID {board_id} in sockets HashMap.");
+          }
+        },
+        Err(TryRecvError::Disconnected) => { warn!("Lost connection to listen() channel. This isn't supposed to happen."); },
+        Err(TryRecvError::Empty) => {}
+      };
+      
+      for (board_id, timer) in timers.iter_mut() {
+        *timer += 1;
+        if *timer > BOARD_TIMEOUT_MS {
+          abort(board_id.to_string());
+          break 'a;
+        }
+      }
+
+      thread::sleep(Duration::from_millis(1));
+    }
+
+    fail!("Detected disconnection. Shutting down switchboard...");
+  })
 }
 
 /// Constantly checks main binding for board data, handles board initalization and data encoding.
@@ -51,36 +138,27 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
   
         task!("Decoding buffer...");
         board_tx.send(match raw_data {
-          DataMessage::Establish(board_id, address) => {
+          DataMessage::Identity(board_id) => {
             if established_sockets.contains(&incoming_address) {
               warn!("{board_id} tried to re-establish previously established socket. Ignoring.");
               continue;
             }
             established_sockets.insert(incoming_address);
-  
-            let write_socket = match UdpSocket::bind(address) {
-              Ok(socket) => socket,
-              Err(e) => {
-                fail!("Could not bind to socket: {e}");
-                continue;
-              }
-            };
 
-  
-            let value = DataMessage::FlightEstablishAck(None);
+            let value = DataMessage::Identity(String::from("flight-01"));
 
             if let Err(e) = postcard::to_slice(&value, &mut buf) {
-              warn!("postcard returned this error when attempting to serialize DataMessage::FlightEstablishAck: {e}");
+              warn!("postcard returned this error when attempting to serialize DataMessage::Identity: {e}");
               continue;
             }
 
-            if let Err(e) = write_socket.send(&buf) {
-              fail!("Couldn't send sequence to socket {:#?}: {e}", write_socket);
+            if let Err(e) = home_socket.send_to(&buf, incoming_address) {
+              fail!("Couldn't send DataMessage::Identity to ip {incoming_address}: {e}");
             } else {
-              pass!("Sent sequence successfully!");
+              pass!("Sent DataMessage::Identity successfully!");
             }
   
-            Some(BoardCommunications::Init(board_id, write_socket))
+            Some(BoardCommunications::Init(board_id, incoming_address))
           },
           DataMessage::Sam(board_id, datapoints) => {
             pass!("DataMessage::Sam found!");
@@ -91,11 +169,6 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
             pass!("DataMessage::Bms found!");
 
             Some(BoardCommunications::Bsm(board_id))
-          },
-          DataMessage::HeartbeatAck(board_id) => {
-            pass!("Heartbeat found!");
-
-            Some(BoardCommunications::HeartbeatAck(board_id))
           },
           _ => {
             warn!("Unknown data found.");
@@ -108,109 +181,48 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
   }
 }
 
-/// owns sockets and SharedState, changes must be sent via mpsc channel
-fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>, sequence_rx: Receiver<(BoardId, Sequence)>) -> impl FnOnce() -> () {
-  let mappings = mappings.clone();
-  let vehicle_state = vehicle_state.clone();
-  let mut sockets: HashMap<BoardId, UdpSocket> = HashMap::new();
-  let mut timers: HashMap<BoardId, (u32, u8)> = HashMap::new();
-  let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
-
-  thread::spawn(listen(home_socket, board_tx));
-
+fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce() -> () {
   move || {
-    loop {
-      match board_rx.try_recv() {
-        Ok(Some(BoardCommunications::Init(board_id, socket))) => { 
-          sockets.insert(board_id.to_string(), socket);
+    let mut addresses: Vec<SocketAddr> = Vec::new();
+    let mut clock: u32 = 0;
+    let mut buf: Vec<u8> = vec![0; 1024];
 
-          timers.insert(board_id, (0, 0));
-        },
-        Ok(Some(BoardCommunications::Sam(board_id, datapoints)))  => {
-          process_sam_data(vehicle_state.clone(), mappings.clone(), board_id.clone(), datapoints);
-          
-          if let Some(timer) = timers.get_mut(&board_id) {
-            reset(&board_id, timer);
-          } else {
-            warn!("Cannot find timer for board with id of {board_id}!");
-          }
-        },
-        Ok(Some(BoardCommunications::Bsm(board_id))) => {
-          warn!("Recieved BSM data from board {board_id}."); 
-
-          if let Some(timer) = timers.get_mut(&board_id) {
-            reset(&board_id, timer);
-          } else {
-            warn!("Cannot find timer for board with id of {board_id}!");
-          }
-        },
-        Ok(Some(BoardCommunications::HeartbeatAck(board_id))) => {
-          if let Some(timer) = timers.get_mut(&board_id) {
-            reset(&board_id, timer);
-          } else {
-            warn!("Cannot find timer for board with id of {board_id}!");
-          }
-        },
-        Ok(None) => { warn!("Unknown data recieved from board!"); },
-        Err(TryRecvError::Disconnected) => { warn!("Lost connection to listen() channel. This isn't supposed to happen."); },
-        Err(TryRecvError::Empty) => {}
-      };
-
-      match sequence_rx.try_recv() {
-        Ok((board_id, sequence)) => 'a: {
-          let mut buf: Vec<u8> = vec![0; 1024];
-
-          if let Err(e) = postcard::to_slice(&sequence, &mut buf) {
-            fail!("postcard returned this error when attempting to serialize sequence {:#?}: {e}", sequence);
+    if let Err(e) = postcard::to_slice(&DataMessage::FlightHeartbeat, &mut buf) {
+      abort(format!("postcard returned this error when attempting to serialize DataMessage::FlightHeartbeat: {e}"));
+      return;
+    }
+    
+    'a: loop {
+      if clock % HEARTBEAT_INTERVAL_MS == 0 {
+        for address in addresses.iter() {
+          if let Err(e) = socket.send_to(&buf, address) {
+            abort(format!("Couldn't send heartbeat to socket {:#?}: {e}", socket));
             break 'a;
           }
-          
-          if let Some(socket) = sockets.get(&board_id) {
-            if let Err(e) = socket.send(&buf) {
-              fail!("Couldn't send sequence to socket {:#?}: {e}", socket);
-            } else {
-              pass!("Sent sequence successfully!");
-            }
+        }
 
-          } else {
-            fail!("Couldn't find socket with board ID {board_id} in sockets HashMap.");
-          }
-        },
+        clock = 0;
+      }
+      
+      match new_board_rx.try_recv() {
+        Ok(socket) => { addresses.push(socket) },
         Err(TryRecvError::Disconnected) => { warn!("Lost connection to listen() channel. This isn't supposed to happen."); },
         Err(TryRecvError::Empty) => {}
       };
-      
-      for (board_id, timer) in timers.iter_mut() {
-        timer.0 += 1;
-        if timer.0 > HEARTBEAT_TIMEOUT_MS {
-          timer.0 = 0;
-          timer.1 += 1;
-
-          if timer.1 > HEARTBEAT_MAX_TIMEOUT {
-            disconnection_handler(&board_id);
-          } else {
-            let mut buf: Vec<u8> = vec![0; 1024];
-
-            
-            if let Err(e) = postcard::to_slice(&DataMessage::FlightHeartbeat, &mut buf) {
-              warn!("postcard returned this error when attempting to serialize DataMessage::FlightHeartbeat: {e}");
-              continue;
-            }
-
-            if let Some(socket) = sockets.get(board_id) {
-              if let Err(e) = socket.send(&buf) {
-                warn!("Couldn't send sequence to socket {:#?}: {e}", socket);
-              }
-            } else {
-              warn!("Couldn't find socket with board ID {board_id} in sockets HashMap.");
-            }
-          }
-        }
-      }
-
+  
+      clock += 1;
       thread::sleep(Duration::from_millis(1));
     }
   }
+}
+
+fn abort(reason: String) {
+  fail!("{}", reason);
+
+  common::sequence::run(Sequence {
+    name: "abort".to_owned(),
+    script: "abort()".to_owned(),
+  });
 }
 
 fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex<Vec<NodeMapping>>>, board_id: BoardId, data_points: Vec<DataPoint>) {
@@ -246,21 +258,8 @@ fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex
 				}
 			}
 
-			vehicle_state.sensor_readings.insert(mapping.text_id, Measurement { value, unit });
+			vehicle_state.sensor_readings.insert(mapping.text_id.clone(), Measurement { value, unit });
 		}
 	}
 	// TODO: push channel bursts into log file.
-}
-
-fn disconnection_handler(board_id: &str) {
-  fail!("{board_id} isn't responding!.");
-}
-
-fn reset(board_id: &str, timer: &mut (u32, u8)) {
-  if timer.1 > 3 {
-    warn!("{board_id} has reconnected!");
-  }
-
-  timer.0 = 0;
-  timer.1 = 0;
 }

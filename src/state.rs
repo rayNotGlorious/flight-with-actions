@@ -1,6 +1,6 @@
 use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState, BoardId};
 use jeflog::{task, pass, warn, fail};
-use std::{io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::{self, Sender}, Arc, Mutex}, thread};
+use std::{io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::Sender, Arc, Mutex}, thread};
 
 use crate::{forwarder, switchboard, SERVO_PORT};
 
@@ -53,17 +53,19 @@ impl ProgramState {
 const BIND_ADDRESS: (&str, u16) = ("0.0.0.0", 4573);
 
 fn init() -> ProgramState {
-
 	let home_socket = UdpSocket::bind(BIND_ADDRESS)
-	.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
+		.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
+	let vehicle_state = Arc::new(Mutex::new(VehicleState::new()));
+	let mappings: Arc<Mutex<Vec<NodeMapping>>> = Arc::new(Mutex::new(Vec::new()));
+	let sequence_tx = switchboard::run(home_socket, mappings.clone(), vehicle_state.clone())
+		.expect("Couldn't start switchboard.");
+	
 	let shared = SharedState {
-		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
-		mappings: Arc::new(Mutex::new(Vec::new())),
+		vehicle_state,
+		mappings,
 		server_address: Arc::new(Mutex::new(None)),
-		sequence_tx: mpsc::channel().0
+		sequence_tx
 	};
-
-	shared.sequence_tx = switchboard::run(home_socket, shared.mappings, shared.vehicle_state);
 
 	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
 
