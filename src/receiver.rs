@@ -6,14 +6,14 @@ use std::{
 	env, 
 	fs::{File, OpenOptions},
 	io::{self, Write}, 
-	net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket}, 
+	net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket}, 
 	sync::{Arc, Mutex}, 
 	thread,
 	time::Duration
 };
 
 /// Receives and processes data from SAM boards before putting it into the vehicle state.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Receiver {
 	vehicle_state: Arc<Mutex<VehicleState>>,
 	mappings: Arc<Mutex<Vec<NodeMapping>>>,

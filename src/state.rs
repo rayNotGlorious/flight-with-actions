@@ -222,6 +222,8 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 
 fn run_sequence(server_socket: Option<TcpStream>, sequence: Sequence, shared: SharedState) -> ProgramState {
 	if let Some(server_socket) = server_socket {
+		let sequence_name = sequence.name.clone();
+
 		let thread_id = thread::spawn(|| sequence::run(sequence))
 			.thread()
 			.id();
@@ -229,7 +231,7 @@ fn run_sequence(server_socket: Option<TcpStream>, sequence: Sequence, shared: Sh
 		shared.sequences
 			.lock()
 			.unwrap()
-			.insert(sequence.name.clone(), thread_id);
+			.insert(sequence_name, thread_id);
 
 		ProgramState::WaitForOperator { server_socket, shared }
 	} else {

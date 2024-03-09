@@ -35,9 +35,11 @@ pub fn create_device_handler(shared: &SharedState) -> impl Fn(&str, DeviceAction
 }
 
 fn read_sensor(name: &str, vehicle_state: &Mutex<VehicleState>) -> PyObject {
-	let measurement = vehicle_state
+	let vehicle_state = vehicle_state
 		.lock()
-		.unwrap()
+		.unwrap();
+
+	let measurement = vehicle_state
 		.sensor_readings
 		.get(name);
 
@@ -45,7 +47,7 @@ fn read_sensor(name: &str, vehicle_state: &Mutex<VehicleState>) -> PyObject {
 		measurement
 			.map_or(
 				PyNone::get(py).to_object(py),
-				|m| m.into_py(py), 
+				|m| m.clone().into_py(py), 
 			)
 	})
 }
