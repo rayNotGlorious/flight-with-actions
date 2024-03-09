@@ -1,12 +1,11 @@
-use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Duration};
+use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::{Duration, Instant}};
 use common::comm::{BoardId, ChannelType, CompositeValveState, DataMessage, DataPoint, Measurement, NodeMapping, SamControlMessage, SensorType, Sequence, Unit, ValveState, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
 use crate::CommandSender;
 
 /// Milliseconds of inactivity before we sent a heartbeat
-const BOARD_TIMEOUT_MS: u32 = 50;
-const HEARTBEAT_INTERVAL_MS: u32 = 50;
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(50);
 
 enum BoardCommunications {
 	Init(BoardId, SocketAddr),
@@ -26,7 +25,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 	let mappings = mappings.clone();
 	let vehicle_state = vehicle_state.clone();
 	let mut sockets: HashMap<BoardId, SocketAddr> = HashMap::new();
-	let mut timers: HashMap<BoardId, u32> = HashMap::new();
+	let mut timers: HashMap<BoardId, Instant> = HashMap::new();
 	let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
 	let (new_board_tx, new_board_rx) = mpsc::channel::<SocketAddr>();
 
@@ -50,13 +49,13 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 					
 					sockets.insert(board_id.to_string(), address);
 
-					timers.insert(board_id, 0);
+					timers.insert(board_id, Instant::now());
 				},
 				Ok(Some(BoardCommunications::Sam(board_id, datapoints)))  => {
 					process_sam_data(vehicle_state.clone(), mappings.clone(), board_id.clone(), datapoints);
 					
 					if let Some(timer) = timers.get_mut(&board_id) {
-						*timer = 0;
+						*timer = Instant::now();
 					} else {
 						warn!("Cannot find timer for board with id of {board_id}!");
 					}
@@ -65,7 +64,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 					warn!("Recieved BSM data from board {board_id}"); 
 
 					if let Some(timer) = timers.get_mut(&board_id) {
-						*timer = 0;
+						*timer = Instant::now();
 					} else {
 						warn!("Cannot find timer for board with id of {board_id}!");
 					}
@@ -103,14 +102,11 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 			
 			// update timers for all boards
 			for (board_id, timer) in timers.iter_mut() {
-				*timer += 1;
-				if *timer > BOARD_TIMEOUT_MS {
+				if Instant::now() - *timer > HEARTBEAT_INTERVAL {
 					abort(board_id.to_string());
 					break 'a;
 				}
 			}
-
-			thread::sleep(Duration::from_millis(1));
 		}
 
 		fail!("Detected disconnection. Shutting down switchboard...");
@@ -194,7 +190,7 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce() -> () {
 	move || {
 		let mut addresses: Vec<SocketAddr> = Vec::new();
-		let mut clock: u32 = 0;
+		let mut clock: Instant = Instant::now();
 		let mut buf: Vec<u8> = vec![0; 1024];
 
 		let heartbeat = match postcard::to_slice(&DataMessage::FlightHeartbeat, &mut buf) {
@@ -206,7 +202,7 @@ fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce()
 		};
 
 		'a: loop {
-			if clock % HEARTBEAT_INTERVAL_MS == 0 {
+			if Instant::now() - clock > HEARTBEAT_INTERVAL {
 				for address in addresses.iter() {
 					if let Err(e) = socket.send_to(heartbeat, address) {
 						abort(format!("Couldn't send heartbeat to socket {:#?}: {e}", socket));
@@ -214,7 +210,7 @@ fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce()
 					}
 				}
 
-				clock = 0;
+				clock = Instant::now();
 			}
 			
 			match new_board_rx.try_recv() {
@@ -222,9 +218,6 @@ fn pulse(socket: UdpSocket, new_board_rx: Receiver<SocketAddr>) -> impl FnOnce()
 				Err(TryRecvError::Disconnected) => { warn!("Lost connection to new_board_tx. This isn't supposed to happen."); },
 				Err(TryRecvError::Empty) => {}
 			};
-	
-			clock += 1;
-			thread::sleep(Duration::from_millis(1));
 		}
 	}
 }
