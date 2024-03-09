@@ -67,7 +67,7 @@ fn init() -> ProgramState {
 		sequence_tx
 	};
 
-	common::sequence::initialize(shared.vehicle_state.clone(), shared.mappings.clone());
+	common::sequence::initialize(shared.mappings.clone());
 
 	ProgramState::ServerDiscovery { shared }
 }

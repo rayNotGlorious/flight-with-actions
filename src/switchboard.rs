@@ -1,5 +1,5 @@
 use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Duration};
-use common::comm::{BoardId, SamControlMessage, ChannelType, DataMessage, DataPoint, Measurement, NodeMapping, Sequence, Unit, VehicleState};
+use common::comm::{BoardId, ChannelType, CompositeValveState, DataMessage, DataPoint, Measurement, NodeMapping, SamControlMessage, SensorType, Sequence, Unit, ValveState, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
 /// Milliseconds of inactivity before we sent a heartbeat
@@ -229,40 +229,133 @@ fn abort(reason: String) {
 }
 
 fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex<Vec<NodeMapping>>>, board_id: BoardId, data_points: Vec<DataPoint>) {
-	let mut vehicle_state = vehicle_state.lock().unwrap();
+  let mut vehicle_state = vehicle_state.lock().unwrap();
 
-	let mappings = mappings.lock().unwrap();
+  let mappings = mappings.lock().unwrap();
 
-	for data_point in data_points {
-		let mapping = mappings.iter().find(|mapping|
-			data_point.channel == mapping.channel
-			&& data_point.channel_type == mapping.channel_type
-			&& board_id == mapping.board_id
-		);
+  for data_point in data_points {
+    for mapping in &*mappings {
+      // checks if this mapping corresponds to the data point and, if not, continues
+      // originally, I intended to implement this with a HashMap, but considering how
+      // few elements will be there, I suspect that it will actually be faster with a
+      // vector and full iteration. I may be wrong; we will have to perf.
+      let corresponds = data_point.channel == mapping.channel
+        && mapping.sensor_type.channel_types().contains(&data_point.channel_type)
+        && *board_id == mapping.board_id;
 
-		if let Some(mapping) = mapping {
-			let mut unit = mapping.channel_type.unit();
-			let mut value = data_point.value;
+      if !corresponds {
+        continue;
+      }
 
-			// apply linear transformations to current loop and differential signal channels
-			// if the max and min are supplied by the mappings. otherwise, default back to volts.
-			if mapping.channel_type == ChannelType::CurrentLoop {
-				if let (Some(max), Some(min)) = (mapping.max, mapping.min) {
-					// formula for converting voltage into psi for our PTs
-					value = (value - 0.8) / 3.2 * (max - min) + min - mapping.calibrated_offset;
+      let mut text_id = mapping.text_id.clone();
+
+      let measurement = match mapping.sensor_type {
+        SensorType::LoadCell | SensorType::RailVoltage => Measurement { value: data_point.value, unit: Unit::Volts },
+        SensorType::Rtd | SensorType::Tc => Measurement { value: data_point.value, unit: Unit::Kelvin },
+        SensorType::RailCurrent => Measurement { value: data_point.value, unit: Unit::Amps },
+        SensorType::Pt => {
+          let value;
+          let unit;
+
+          // apply linear transformations to current loop and differential signal channels
+          // if the max and min are supplied by the mappings. otherwise, default back to volts.
+          if let (Some(max), Some(min)) = (mapping.max, mapping.min) {
+            // formula for converting voltage into psi for our PTs
+            // TODO: consider precalculating scale and offset on control server
+            value = (data_point.value - 0.8) / 3.2 * (max - min) + min - mapping.calibrated_offset;
+            unit = Unit::Psi;
+          } else {
+            // if no PT ratings are set, default to displaying raw voltage
+            value = data_point.value;
+            unit = Unit::Volts;
+          }
+
+          Measurement { value, unit }
+        },
+        SensorType::Valve => {
+          let voltage;
+          let current;
+          let measurement;
+
+          match data_point.channel_type {
+            ChannelType::ValveVoltage => {
+              voltage = data_point.value;
+              current = vehicle_state.sensor_readings.get(&format!("{text_id}_I"))
+                .map(|measurement| measurement.value)
+                .unwrap_or(0.0);
+
+              measurement = Measurement { value: data_point.value, unit: Unit::Volts };
+              text_id = format!("{text_id}_V");
+            },
+            ChannelType::ValveCurrent => {
+              current = data_point.value;
+              voltage = vehicle_state.sensor_readings.get(&format!("{text_id}_V"))
+                .map(|measurement| measurement.value)
+                .unwrap_or(0.0);
+
+              measurement = Measurement { value: data_point.value, unit: Unit::Amps };
+              text_id = format!("{text_id}_I");
+            },
+            channel_type => {
+              warn!("Measured channel type of '{channel_type:?}' for valve.");
+              continue;
+            },
+          };
+
+          let actual_state = estimate_valve_state(voltage, current, mapping.powered_threshold, mapping.normally_closed);
+
+          if let Some(existing) = vehicle_state.valve_states.get_mut(&mapping.text_id) {
+            existing.actual = actual_state;
+          } else {
+            vehicle_state.valve_states.insert(mapping.text_id.clone(), CompositeValveState {
+              commanded: ValveState::Undetermined,
+              actual: actual_state
+            });
+          }
+
+          measurement
+        },
+      };
+
+      // replace item without cloning string if already present
+      if let Some(existing) = vehicle_state.sensor_readings.get_mut(&text_id) {
+        *existing = measurement;
+      } else {
+        vehicle_state.sensor_readings.insert(text_id, measurement);
+      }
+    }
+  }
+}
+
+/// Estimates the state of a valve given its voltage, current, and the current threshold at which it is considered powered.
+fn estimate_valve_state(voltage: f64, current: f64, powered_threshold: Option<f64>, normally_closed: Option<bool>) -> ValveState {
+	// calculate the actual state of the valve, assuming that it's normally closed
+	let mut estimated = match powered_threshold {
+		Some(powered) => {
+			if current < powered { // valve is unpowered
+				if voltage < 4.0 {
+					ValveState::Closed
 				} else {
-					unit = Unit::Volts;
+					ValveState::Disconnected
 				}
-			} else if mapping.channel_type == ChannelType::DifferentialSignal {
-				if let (Some(_max), Some(_min)) = (mapping.max, mapping.min) {
-					// TODO: implement formula for converting voltage into value for differential signal devices (typically load cells)
+			 } else { // valve is powered
+				if voltage < 20.0 {
+					ValveState::Fault
 				} else {
-					unit = Unit::Volts;
+					ValveState::Open
 				}
 			}
+		},
+		None => ValveState::Fault,
+	};
 
-			vehicle_state.sensor_readings.insert(mapping.text_id.clone(), Measurement { value, unit });
-		}
+	if normally_closed == Some(false) {
+		estimated = match estimated {
+			ValveState::Open => ValveState::Closed,
+			ValveState::Closed => ValveState::Open,
+			other => other,
+		};
 	}
-	// TODO: push channel bursts into log file.
+
+	estimated
 }
