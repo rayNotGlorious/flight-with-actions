@@ -198,6 +198,25 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 
 							ProgramState::WaitForOperator { server_socket, shared }
 						},
+						FlightControlMessage::StopSequence(name) => {
+							pass!("Received instruction to stop sequence from server.");
+							let stopped = shared.sequences
+								.lock()
+								.unwrap()
+								.remove_by_left(&name);
+
+							if stopped.is_some() {
+								pass!("Stopped sequence '{name}'.");
+							} else {
+								warn!("Sequence '{name}' was not running.");
+							}
+
+							ProgramState::WaitForOperator { server_socket, shared }
+						},
+						FlightControlMessage::Abort => {
+							pass!("Received abort instruction from server.");
+							ProgramState::Abort { shared }
+						}
 					}
 				},
 				Err(error) => {
