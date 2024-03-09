@@ -1,5 +1,5 @@
 use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Duration};
-use common::comm::{BoardId, ChannelType, DataMessage, DataPoint, Measurement, NodeMapping, Sequence, Unit, VehicleState};
+use common::comm::{BoardId, SamControlMessage, ChannelType, DataMessage, DataPoint, Measurement, NodeMapping, Sequence, Unit, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
 /// Milliseconds of inactivity before we sent a heartbeat
@@ -13,14 +13,14 @@ enum BoardCommunications {
 }
 
 /// One-shot thread spawner, begins switchboard logic.
-pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>) -> Result<Sender<(BoardId, Sequence)>, io::Error> {
-  let (tx, rx) = mpsc::channel::<(BoardId, Sequence)>();
+pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>) -> Result<Sender<(BoardId, SamControlMessage)>, io::Error> {
+  let (tx, rx) = mpsc::channel::<(BoardId, SamControlMessage)>();
   thread::spawn(start_switchboard(home_socket, mappings, vehicle_state, rx)?);
   Ok(tx)
 }
 
 /// owns sockets and SharedState, changes must be sent via mpsc channel
-fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>, sequence_rx: Receiver<(BoardId, Sequence)>) -> Result<impl FnOnce() -> (), io::Error> {
+fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>, control_rx: Receiver<(BoardId, SamControlMessage)>) -> Result<impl FnOnce() -> (), io::Error> {
   let mappings = mappings.clone();
   let vehicle_state = vehicle_state.clone();
   let mut sockets: HashMap<BoardId, SocketAddr> = HashMap::new();
@@ -40,6 +40,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
     task!("Switchboard started.");
 
     'a: loop {
+      // interpret data from SAM board
       match board_rx.try_recv() {
         Ok(Some(BoardCommunications::Init(board_id, address))) => { 
           new_board_tx.send(address).expect("Can't find pulse for new board. This shouldn't happen.");
@@ -71,28 +72,30 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
         Err(TryRecvError::Empty) => {}
       };
 
-      match sequence_rx.try_recv() {
-        Ok((board_id, sequence)) => 'b: {
+      // send sam control message to SAM
+      match control_rx.try_recv() {
+        Ok((board_id, control_message)) => 'b: {
           let mut buf: Vec<u8> = vec![0; 1024];
 
-          if let Err(e) = postcard::to_slice(&sequence, &mut buf) {
-            fail!("postcard returned this error when attempting to serialize sequence {:#?}: {e}", sequence);
+          if let Err(e) = postcard::to_slice(&control_message, &mut buf) {
+            fail!("postcard returned this error when attempting to serialize control message {:#?}: {e}", control_message);
             break 'b;
           }
           
           if let Some(socket) = sockets.get(&board_id) {
             match home_socket.send_to(&buf, socket) {
-              Ok(size) => pass!("Sent {size} bits of sequence successfully!"),
-              Err(e) => fail!("Couldn't send sequence to socket {:#?}: {e}", socket),
+              Ok(size) => pass!("Sent {size} bits of control message successfully!"),
+              Err(e) => fail!("Couldn't send control message to board {board_id} via socket {:#?}: {e}", socket),
             };
           } else {
             fail!("Couldn't find socket with board ID {board_id} in sockets HashMap.");
           }
         },
-        Err(TryRecvError::Disconnected) => { warn!("Lost connection to listen() channel. This isn't supposed to happen."); },
+        Err(TryRecvError::Disconnected) => { warn!("Lost connection to control channel. This isn't supposed to happen."); },
         Err(TryRecvError::Empty) => {}
       };
       
+      // update timers for all boards
       for (board_id, timer) in timers.iter_mut() {
         *timer += 1;
         if *timer > BOARD_TIMEOUT_MS {

@@ -1,4 +1,4 @@
-use common::comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState, BoardId};
+use common::comm::{FlightControlMessage, SamControlMessage, NodeMapping, Sequence, VehicleState, BoardId};
 use jeflog::{task, pass, warn, fail};
 use std::{io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{mpsc::Sender, Arc, Mutex}, thread};
 
@@ -13,7 +13,7 @@ pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
-	pub sequence_tx: Sender<(BoardId, Sequence)>
+	pub sequence_tx: Sender<(BoardId, SamControlMessage)>
 }
 
 #[derive(Debug)]
