@@ -152,12 +152,15 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 
 					let value = DataMessage::Identity(String::from("flight-01"));
 
-					if let Err(e) = postcard::to_slice(&value, &mut buf) {
-						warn!("postcard returned this error when attempting to serialize DataMessage::Identity: {e}");
-						continue;
-					}
+					let package = match postcard::to_slice(&value, &mut buf) {
+						Ok(package) => package,
+						Err(e) => {
+							warn!("postcard returned this error when attempting to serialize DataMessage::Identity: {e}");
+							continue;
+						}
+					};
 
-					if let Err(e) = home_socket.send_to(&buf, incoming_address) {
+					if let Err(e) = home_socket.send_to(package, incoming_address) {
 						fail!("Couldn't send DataMessage::Identity to ip {incoming_address}: {e}");
 					} else {
 						pass!("Sent DataMessage::Identity successfully.");
