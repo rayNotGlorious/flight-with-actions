@@ -16,12 +16,18 @@ pub fn create_device_handler(shared: &SharedState, command_tx: Sender<(BoardId, 
 		let sequences = sequences.lock().unwrap();
 		
 		if sequences.get_by_right(&thread_id).is_none() {
-			Python::with_gil(|py| {
+			drop(sequences);
+
+			return Python::with_gil(|py| {
 				AbortError::new_err("aborting sequence").restore(py);
 				assert!(PyErr::occurred(py));
 				drop(PyErr::fetch(py));
-			})
+
+				PyNone::get(py).to_object(py)
+			});
 		}
+
+		drop(sequences);
 
 		match action {
 			DeviceAction::ReadSensor => read_sensor(device, &vehicle_state),
