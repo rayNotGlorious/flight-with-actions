@@ -25,6 +25,7 @@ pub fn create_device_handler(shared: &SharedState, command_tx: Sender<(BoardId, 
 
 		match action {
 			DeviceAction::ReadSensor => read_sensor(device, &vehicle_state),
+			DeviceAction::ReadValveState => read_valve_state(device, &vehicle_state),
 			DeviceAction::ActuateValve { state } => {
 				actuate_valve(device, state, &mappings, &tx);
 				Python::with_gil(|py| PyNone::get(py).to_object(py))
@@ -48,6 +49,23 @@ fn read_sensor(name: &str, vehicle_state: &Mutex<VehicleState>) -> PyObject {
 				PyNone::get(py).to_object(py),
 				|m| m.clone().into_py(py), 
 			)
+	})
+}
+
+fn read_valve_state(name: &str, vehicle_state: &Mutex<VehicleState>) -> PyObject {
+	let vehicle_state = vehicle_state
+		.lock()
+		.unwrap();
+
+	let state = vehicle_state
+		.valve_states
+		.get(name);
+
+	Python::with_gil(|py| {
+		state.map_or(
+			PyNone::get(py).to_object(py),
+			|s| s.actual.to_string().into_py(py),
+		)
 	})
 }
 
