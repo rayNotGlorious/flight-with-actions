@@ -12,22 +12,22 @@ pub fn create_device_handler(shared: &SharedState, command_tx: Sender<(BoardId, 
 	let tx = command_tx.clone();
 
 	move |device, action| {
-		let thread_id = thread::current().id();
-		let sequences = sequences.lock().unwrap();
+		// let thread_id = thread::current().id();
+		// let sequences = sequences.lock().unwrap();
 		
-		if sequences.get_by_right(&thread_id).is_none() {
-			drop(sequences);
+		// if sequences.get_by_right(&thread_id).is_none() {
+		// 	drop(sequences);
 
-			return Python::with_gil(|py| {
-				AbortError::new_err("aborting sequence").restore(py);
-				assert!(PyErr::occurred(py));
-				drop(PyErr::fetch(py));
+		// 	return Python::with_gil(|py| {
+		// 		AbortError::new_err("aborting sequence").restore(py);
+		// 		assert!(PyErr::occurred(py));
+		// 		drop(PyErr::fetch(py));
 
-				PyNone::get(py).to_object(py)
-			});
-		}
+		// 		PyNone::get(py).to_object(py)
+		// 	});
+		// }
 
-		drop(sequences);
+		// drop(sequences);
 
 		match action {
 			DeviceAction::ReadSensor => read_sensor(device, &vehicle_state),
