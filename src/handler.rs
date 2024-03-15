@@ -95,6 +95,7 @@ fn actuate_valve(name: &str, state: ValveState, mappings: &Mutex<Vec<NodeMapping
 		Err(e) => fail!("Command couldn't be sent: {e}")
 	}
 
+	drop(mappings);
 	let mut vehicle_state = vehicle_state.lock().unwrap();
 
 	if let Some(existing) = vehicle_state.valve_states.get_mut(name) {
