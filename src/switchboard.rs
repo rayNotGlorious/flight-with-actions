@@ -29,7 +29,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 	let mappings = mappings.clone();
 	let vehicle_state = vehicle_state.clone();
 	let sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>> = Arc::new(Mutex::new(HashMap::new()));
-	let mut timers: HashMap<BoardId, Instant> = HashMap::new();
+	let mut timers: HashMap<BoardId, Option<Instant>> = HashMap::new();
 	let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
 	
 	task!("Cloning sockets...");
@@ -43,7 +43,6 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 	Ok(move || {
 		task!("Switchboard started.");
 
-		let mut remove_boards: Vec<BoardId> = Vec::new();
 		loop {
 			// interpret data from SAM board
 			match board_rx.try_recv() {
@@ -51,13 +50,13 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 					let mut sockets = sockets.lock().unwrap();
 					sockets.insert(board_id.to_string(), address);
 
-					timers.insert(board_id, Instant::now());
+					timers.insert(board_id, Some(Instant::now()));
 				},
 				Ok(Some(BoardCommunications::Sam(board_id, datapoints)))  => {
 					process_sam_data(vehicle_state.clone(), mappings.clone(), board_id.clone(), datapoints);
 					
 					if let Some(timer) = timers.get_mut(&board_id) {
-						*timer = Instant::now();
+						*timer = Some(Instant::now());
 					} else {
 						warn!("Cannot find timer for board with id of {board_id}!");
 					}
@@ -66,7 +65,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 					warn!("Recieved BSM data from board {board_id}"); 
 
 					if let Some(timer) = timers.get_mut(&board_id) {
-						*timer = Instant::now();
+						*timer = Some(Instant::now());
 					} else {
 						warn!("Cannot find timer for board with id of {board_id}!");
 					}
@@ -107,22 +106,16 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 			
 
 			// make this cleaner
-			let mut sockets = sockets.lock().unwrap();
 			// update timers for all boards
 			for (board_id, timer) in timers.iter_mut() {
-				if Instant::now() - *timer > HEARTBEAT_INTERVAL {
-					abort(format!("{board_id} is unresponsive. Aborting..."));
-					sockets.remove(board_id);
+				if let Some(raw_time) = timer {
+					if Instant::now() - *raw_time > HEARTBEAT_INTERVAL {
+						abort(format!("{board_id} is unresponsive. Aborting..."));
+						*timer = None;
 
-					remove_boards.push(board_id.clone());
+					}
 				}
 			}
-
-			for board in &remove_boards {
-				timers.remove(board);
-			}
-
-			remove_boards.clear();
 		}
 	})
 }
