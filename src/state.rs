@@ -3,20 +3,21 @@ use jeflog::{task, pass, warn, fail};
 use postcard::experimental::max_size::MaxSize;
 use std::{fmt, io::{self, Read, Write}, net::{IpAddr, TcpStream, UdpSocket}, sync::{Arc, Mutex}, thread::{self, ThreadId}, time::Duration};
 use bimap::BiHashMap;
-use crate::{forwarder, switchboard, handler::create_device_handler, SERVO_PORT};
+use crate::{forwarder, handler::{self, create_device_handler}, switchboard, SERVO_PORT};
 use pyo3::Python;
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
 /// 
 /// Everything in this struct should be wrapped with `Arc<Mutex<T>>`. **Do not abuse this struct.**
 /// It is intended for what would typically be global state.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SharedState {
 	pub vehicle_state: Arc<Mutex<VehicleState>>,
 	pub mappings: Arc<Mutex<Vec<NodeMapping>>>,
 	pub server_address: Arc<Mutex<Option<IpAddr>>>,
 	pub triggers: Arc<Mutex<Vec<common::comm::Trigger>>>,
 	pub sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>,
+	pub abort_sequence: Arc<Mutex<Option<Sequence>>>,
 }
 
 
@@ -45,19 +46,13 @@ pub enum ProgramState {
 	/// State which spawns a thread to run a sequence before returning to the
 	/// `WaitForOperator` state.
 	RunSequence {
-		server_socket: Option<TcpStream>,
+		server_socket: TcpStream,
 
 		/// A full description of the sequence to run.
 		sequence: Sequence,
 
 		/// The shared flight state.
 		shared: SharedState,
-	},
-
-	/// The abort state, which safes the system and returns to `Init`.
-	Abort {
-		/// The shared flight state.
-		shared: SharedState
 	},
 }
 
@@ -69,7 +64,6 @@ impl ProgramState {
 			ProgramState::ServerDiscovery { shared } => server_discovery(shared),
 			ProgramState::WaitForOperator { server_socket, shared } => wait_for_operator(server_socket, shared),
 			ProgramState::RunSequence { server_socket, sequence, shared } => run_sequence(server_socket, sequence, shared),
-			ProgramState::Abort { shared } => abort(shared),
 		}
 	}
 }
@@ -91,7 +85,6 @@ impl fmt::Display for ProgramState {
 			Self::RunSequence { sequence, .. } => {
 				write!(f, "RunSequence(name = {})", sequence.name)
 			},
-			Self::Abort { .. } => write!(f, "Abort"),
 		}
 	}
 }
@@ -117,10 +110,11 @@ fn init() -> ProgramState {
 		server_address: Arc::new(Mutex::new(None)),
 		triggers: Arc::new(Mutex::new(Vec::new())),
 		sequences: Arc::new(Mutex::new(BiHashMap::new())),
+		abort_sequence: Arc::new(Mutex::new(None)),
 	};
 
 	sequence::initialize(shared.mappings.clone());
-	sequence::set_device_handler(create_device_handler(&shared, command_tx));
+	sequence::set_device_handler(create_device_handler(shared.clone(), command_tx));
 
 	thread::spawn(check_triggers(&shared));
 
@@ -206,11 +200,15 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 						},
 						FlightControlMessage::Sequence(sequence) => {
 							pass!("Received sequence from server: {sequence:#?}");
-							ProgramState::RunSequence {
-								server_socket: Some(server_socket),
-								sequence,
-								shared,
+
+							// if the abort sequence was set, don't run it
+							// set the shared abort sequence and return early
+							if sequence.name == "abort" {
+								*shared.abort_sequence.lock().unwrap() = Some(sequence);
+								return ProgramState::WaitForOperator { server_socket, shared };
 							}
+
+							ProgramState::RunSequence { server_socket, sequence, shared }
 						},
 						FlightControlMessage::Trigger(trigger) => {
 							pass!("Received trigger from server: {trigger:#?}");
@@ -251,7 +249,8 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 						},
 						FlightControlMessage::Abort => {
 							pass!("Received abort instruction from server.");
-							ProgramState::Abort { shared }
+							handler::abort(&shared);
+							ProgramState::WaitForOperator { server_socket, shared }
 						}
 					}
 				},
@@ -271,43 +270,24 @@ fn wait_for_operator(mut server_socket: TcpStream, shared: SharedState) -> Progr
 	}
 }
 
-fn run_sequence(server_socket: Option<TcpStream>, sequence: Sequence, shared: SharedState) -> ProgramState {
-	if let Some(server_socket) = server_socket {
-		let sequence_name = sequence.name.clone();
+/// Spawns a thread which runs the specified sequence before returning to `WaitForOperator`.
+fn run_sequence(server_socket: TcpStream, sequence: Sequence, shared: SharedState) -> ProgramState {
+	let sequence_name = sequence.name.clone();
 
-		let thread_id = thread::spawn(|| sequence::run(sequence))
-			.thread()
-			.id();
+	let thread_id = thread::spawn(|| sequence::run(sequence))
+		.thread()
+		.id();
 
-		shared.sequences
-			.lock()
-			.unwrap()
-			.insert(sequence_name, thread_id);
+	shared.sequences
+		.lock()
+		.unwrap()
+		.insert(sequence_name, thread_id);
 
-		ProgramState::WaitForOperator { server_socket, shared }
-	} else {
-		shared.sequences
-			.lock()
-			.unwrap()
-			.clear();
-
-		sequence::run(sequence);
-
-		ProgramState::ServerDiscovery { shared }
-	}
+	ProgramState::WaitForOperator { server_socket, shared }
 }
 
-fn abort(shared: SharedState) -> ProgramState {
-	ProgramState::RunSequence {
-		sequence: Sequence {
-			name: "abort".to_owned(),
-			script: "abort()".to_owned(),
-		},
-		server_socket: None,
-		shared,
-	}
-}
-
+/// Constructs a closure which continuously checks if any triggers have tripped,
+/// running the corresponding script inline if so.
 fn check_triggers(shared: &SharedState) -> impl FnOnce() -> () {
 	let triggers = shared.triggers.clone();
 

@@ -1,39 +1,40 @@
-use common::{comm::{BoardId, CompositeValveState, NodeMapping, SamControlMessage, ValveState, VehicleState}, sequence::{AbortError, DeviceAction}};
-use jeflog::{task, fail, pass};
+use common::{comm::{BoardId, CompositeValveState, NodeMapping, SamControlMessage, ValveState, VehicleState}, sequence::{self, AbortError, DeviceAction}};
+use jeflog::{fail, pass, task, warn};
 use pyo3::{types::PyNone, IntoPy, PyErr, PyObject, Python, ToPyObject};
 use std::{sync::{mpsc::Sender, Mutex}, thread};
 
 use crate::state::SharedState;
 
-pub fn create_device_handler(shared: &SharedState, command_tx: Sender<(BoardId, SamControlMessage)>) -> impl Fn(&str, DeviceAction) -> PyObject {
-	let vehicle_state = shared.vehicle_state.clone();
-	let sequences = shared.sequences.clone();
-	let mappings = shared.mappings.clone();
+pub fn create_device_handler(shared: SharedState, command_tx: Sender<(BoardId, SamControlMessage)>) -> impl Fn(&str, DeviceAction) -> PyObject {
 	let tx = command_tx.clone();
 
 	move |device, action| {
-		// let thread_id = thread::current().id();
-		// let sequences = sequences.lock().unwrap();
+		let thread_id = thread::current().id();
+		let sequences = shared.sequences.lock().unwrap();
 		
-		// if sequences.get_by_right(&thread_id).is_none() {
-		// 	drop(sequences);
+		if sequences.get_by_right(&thread_id).is_none() {
+			drop(sequences);
 
-		// 	return Python::with_gil(|py| {
-		// 		AbortError::new_err("aborting sequence").restore(py);
-		// 		assert!(PyErr::occurred(py));
-		// 		drop(PyErr::fetch(py));
+			return Python::with_gil(|py| {
+				AbortError::new_err("aborting sequence").restore(py);
+				assert!(PyErr::occurred(py));
+				drop(PyErr::fetch(py));
 
-		// 		PyNone::get(py).to_object(py)
-		// 	});
-		// }
+				PyNone::get(py).to_object(py)
+			});
+		}
 
-		// drop(sequences);
+		drop(sequences);
 
 		match action {
-			DeviceAction::ReadSensor => read_sensor(device, &vehicle_state),
-			DeviceAction::ReadValveState => read_valve_state(device, &vehicle_state),
+			DeviceAction::ReadSensor => read_sensor(device, &shared.vehicle_state),
+			DeviceAction::ReadValveState => read_valve_state(device, &shared.vehicle_state),
 			DeviceAction::ActuateValve { state } => {
-				actuate_valve(device, state, &mappings, &vehicle_state, &tx);
+				actuate_valve(device, state, &shared.mappings, &shared.vehicle_state, &tx);
+				Python::with_gil(|py| PyNone::get(py).to_object(py))
+			},
+			DeviceAction::Abort => {
+				abort(&shared);
 				Python::with_gil(|py| PyNone::get(py).to_object(py))
 			},
 		}
@@ -106,6 +107,25 @@ fn actuate_valve(name: &str, state: ValveState, mappings: &Mutex<Vec<NodeMapping
 			actual: ValveState::Undetermined
 		});
 	}
+}
+
+pub fn abort(shared: &SharedState) {
+	let abort_sequence = shared.abort_sequence
+		.lock()
+		.unwrap()
+		.clone();
+
+	let Some(sequence) = abort_sequence else {
+		warn!("Abort was called but no abort sequence is set.");
+		return;
+	};
+
+	shared.sequences
+		.lock()
+		.unwrap()
+		.clear();
+
+	sequence::run(sequence);
 }
 
 
