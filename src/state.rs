@@ -1,6 +1,7 @@
-use common::{comm::{FlightControlMessage, NodeMapping, Sequence, VehicleState}, sequence};
+use common::{comm::{Computer, FlightControlMessage, NodeMapping, Sequence, VehicleState}, sequence};
 use jeflog::{task, pass, warn, fail};
-use std::{fmt, time::Duration, io::{self, Read}, net::{IpAddr, TcpStream, UdpSocket}, sync::{Arc, Mutex}, thread::{self, ThreadId}};
+use postcard::experimental::max_size::MaxSize;
+use std::{fmt, io::{self, Read, Write}, net::{IpAddr, TcpStream, UdpSocket}, sync::{Arc, Mutex}, thread::{self, ThreadId}, time::Duration};
 use bimap::BiHashMap;
 use crate::{forwarder, switchboard, handler::create_device_handler, SERVO_PORT};
 use pyo3::Python;
@@ -98,15 +99,16 @@ impl fmt::Display for ProgramState {
 fn init() -> ProgramState {
 	let home_socket = UdpSocket::bind(BIND_ADDRESS)
 		.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
+
 	let vehicle_state = Arc::new(Mutex::new(VehicleState::new()));
 	let mappings: Arc<Mutex<Vec<NodeMapping>>> = Arc::new(Mutex::new(Vec::new()));
-	let command_tx = 
-		match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone()) {
-			Ok(command_tx) => command_tx,
-			Err(error) => {
-				fail!("Failed to create switchboard: {error}");
-				return ProgramState::Init;
-			}
+
+	let command_tx = match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone()) {
+		Ok(command_tx) => command_tx,
+		Err(error) => {
+			fail!("Failed to create switchboard: {error}");
+			return ProgramState::Init;
+		}
 	};
 	
 	let shared = SharedState {
@@ -133,17 +135,51 @@ fn server_discovery(shared: SharedState) -> ProgramState {
 	for host in potential_hostnames {
 		task!("Attempting to connect to \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
 
-		if let Ok(stream) = TcpStream::connect((host, SERVO_PORT)) {
-			pass!("Successfully connected to \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
-			pass!("Found control server at \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
+		let Ok(mut stream) = TcpStream::connect((host, SERVO_PORT)) else {
+			fail!("Failed to connect to \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
+			continue;
+		};
 
-			*shared.server_address.lock().unwrap() = Some(stream.peer_addr().unwrap().ip());
-			thread::spawn(forwarder::forward_vehicle_state(&shared));
+		pass!("Successfully connected to \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
+		pass!("Found control server at \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
 
-			return ProgramState::WaitForOperator { server_socket: stream, shared };
+		let hostname = hostname::get()
+			.ok()
+			.and_then(|name| name.into_string().ok());
+	
+		let computer;
+
+		if let Some(hostname) = hostname {
+			if hostname.starts_with("flight") {
+				computer = Computer::Flight;
+			} else if hostname.starts_with("ground") {
+				computer = Computer::Ground;
+			} else {
+				warn!("Local hostname does not start with 'flight' or 'ground'. Defaulting to flight.");
+				computer = Computer::Flight;
+			}
+		} else {
+			warn!("Failed to get local hostname. Defaulting to flight.");
+			computer = Computer::Flight;
 		}
 
-		fail!("Failed to connect to \x1b[1m{}:{SERVO_PORT}\x1b[0m.", host);
+		// buffer containing the serialized identity message to be sent to the control server
+		let mut identity = [0; Computer::POSTCARD_MAX_SIZE];
+
+		if let Err(error) = postcard::to_slice(&computer, &mut identity) {
+			fail!("Failed to serialize Computer: {error}");
+			continue;
+		}
+
+		if let Err(error) = stream.write_all(&identity) {
+			warn!("Failed to send identity message to control server: {error}");
+			continue;
+		}
+
+		*shared.server_address.lock().unwrap() = Some(stream.peer_addr().unwrap().ip());
+		thread::spawn(forwarder::forward_vehicle_state(&shared));
+
+		return ProgramState::WaitForOperator { server_socket: stream, shared };
 	}
 
 	fail!("Failed to locate control server at all potential hostnames. Retrying.");
