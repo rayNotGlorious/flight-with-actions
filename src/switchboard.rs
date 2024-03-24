@@ -41,8 +41,6 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 	thread::spawn(pulse(pulse_socket, sockets.clone()));
 
 	Ok(move || {
-		task!("Switchboard started.");
-
 		let mut remove_boards: Vec<BoardId> = Vec::new();
 		loop {
 			// interpret data from SAM board
