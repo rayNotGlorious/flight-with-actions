@@ -98,10 +98,13 @@ impl fmt::Display for ProgramState {
 fn init() -> ProgramState {
 	let home_socket = UdpSocket::bind(BIND_ADDRESS)
 		.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
+
 	let vehicle_state = Arc::new(Mutex::new(VehicleState::new()));
 	let mappings: Arc<Mutex<Vec<NodeMapping>>> = Arc::new(Mutex::new(Vec::new()));
+	let sequences: Arc<Mutex<BiHashMap<String, ThreadId>>> = Arc::new(Mutex::new(BiHashMap::new()));
+
 	let command_tx = 
-		match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone()) {
+		match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone(), sequences.clone()) {
 			Ok(command_tx) => command_tx,
 			Err(error) => {
 				fail!("Failed to create switchboard: {error}");
@@ -114,7 +117,7 @@ fn init() -> ProgramState {
 		mappings,
 		server_address: Arc::new(Mutex::new(None)),
 		triggers: Arc::new(Mutex::new(Vec::new())),
-		sequences: Arc::new(Mutex::new(BiHashMap::new())),
+		sequences
 	};
 
 	sequence::initialize(shared.mappings.clone());
