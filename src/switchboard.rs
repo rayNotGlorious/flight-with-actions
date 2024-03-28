@@ -39,7 +39,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 
 	Ok(move || {
 		task!("Switchboard started.");
-
+    
 		loop {
 			// interpret data from SAM board
 			match board_rx.try_recv() {
@@ -109,7 +109,6 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 					if Instant::now() - *raw_time > HEARTBEAT_INTERVAL {
 						abort(format!("{board_id} is unresponsive. Aborting..."), sequences.clone());
 						*timer = None;
-
 					}
 				}
 			}
