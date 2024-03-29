@@ -95,13 +95,15 @@ fn init() -> ProgramState {
 
 	let vehicle_state = Arc::new(Mutex::new(VehicleState::new()));
 	let mappings: Arc<Mutex<Vec<NodeMapping>>> = Arc::new(Mutex::new(Vec::new()));
+	let sequences: Arc<Mutex<BiHashMap<String, ThreadId>>> = Arc::new(Mutex::new(BiHashMap::new()));
 
-	let command_tx = match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone()) {
-		Ok(command_tx) => command_tx,
-		Err(error) => {
-			fail!("Failed to create switchboard: {error}");
-			return ProgramState::Init;
-		}
+	let command_tx = 
+		match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone(), sequences.clone()) {
+			Ok(command_tx) => command_tx,
+			Err(error) => {
+				fail!("Failed to create switchboard: {error}");
+				return ProgramState::Init;
+			}
 	};
 	
 	let shared = SharedState {
@@ -109,7 +111,7 @@ fn init() -> ProgramState {
 		mappings,
 		server_address: Arc::new(Mutex::new(None)),
 		triggers: Arc::new(Mutex::new(Vec::new())),
-		sequences: Arc::new(Mutex::new(BiHashMap::new())),
+		sequences
 		abort_sequence: Arc::new(Mutex::new(None)),
 	};
 
