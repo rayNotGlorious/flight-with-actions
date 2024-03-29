@@ -1,9 +1,8 @@
-use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread::{self, ThreadId}, time::{Duration, Instant}};
-use bimap::BiHashMap;
+use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::{Duration, Instant}};
 use common::comm::{BoardId, ChannelType, CompositeValveState, DataMessage, DataPoint, Measurement, NodeMapping, SamControlMessage, SensorType, Unit, ValveState, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
-use crate::CommandSender;
+use crate::{handler, state::SharedState, CommandSender};
 
 /// Milliseconds of inactivity before we sent a heartbeat
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(50);
@@ -15,16 +14,17 @@ enum BoardCommunications {
 }
 
 /// One-shot thread spawner, begins switchboard logic.
-pub fn run(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>, sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>) -> Result<CommandSender, io::Error> {
+pub fn run(home_socket: UdpSocket, shared: SharedState) -> Result<CommandSender, io::Error> {
 	let (tx, rx) = mpsc::channel::<(BoardId, SamControlMessage)>();
-	thread::spawn(start_switchboard(home_socket, mappings, vehicle_state, sequences, rx)?);
+	thread::spawn(start_switchboard(home_socket, shared, rx)?);
 	Ok(tx)
 }
 
 /// owns sockets and SharedState, changes must be sent via mpsc channel
-fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping>>>, vehicle_state: Arc<Mutex<VehicleState>>, sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>, control_rx: Receiver<(BoardId, SamControlMessage)>) -> Result<impl FnOnce() -> (), io::Error> {
-	let mappings = mappings.clone();
-	let vehicle_state = vehicle_state.clone();
+fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Receiver<(BoardId, SamControlMessage)>) -> Result<impl FnOnce() -> (), io::Error> {
+	let mappings = shared.mappings.clone();
+	let vehicle_state = shared.vehicle_state.clone();
+
 	let sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>> = Arc::new(Mutex::new(HashMap::new()));
 	let mut timers: HashMap<BoardId, Option<Instant>> = HashMap::new();
 	let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
@@ -35,7 +35,7 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 	pass!("Sockets cloned!");
 
 	thread::spawn(listen(listen_socket, board_tx));
-	thread::spawn(pulse(pulse_socket, sockets.clone(), sequences.clone()));
+	thread::spawn(pulse(pulse_socket, sockets.clone(), &shared));
 
 	Ok(move || {
 		task!("Switchboard started.");
@@ -107,7 +107,8 @@ fn start_switchboard(home_socket: UdpSocket, mappings: Arc<Mutex<Vec<NodeMapping
 			for (board_id, timer) in timers.iter_mut() {
 				if let Some(raw_time) = timer {
 					if Instant::now() - *raw_time > HEARTBEAT_INTERVAL {
-						abort(format!("{board_id} is unresponsive. Aborting..."), sequences.clone());
+						fail!("{}", format!("{board_id} is unresponsive. Aborting..."));
+						abort(&shared);
 						*timer = None;
 					}
 				}
@@ -190,7 +191,8 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 	}
 }
 
-fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>) -> impl FnOnce() -> () {
+fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, shared: &SharedState) -> impl FnOnce() -> () {
+	let shared = shared.clone();
 	let sockets = sockets.clone();
 
 	move || {
@@ -200,7 +202,8 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 		let heartbeat = match postcard::to_slice(&DataMessage::FlightHeartbeat, &mut buf) {
 			Ok(package) => package,
 			Err(e) => {
-				abort(format!("postcard returned this error when attempting to serialize DataMessage::FlightHeartbeat: {e}"), sequences.clone());
+				fail!("postcard returned this error when attempting to serialize DataMessage::FlightHeartbeat: {e}");
+				abort(&shared);
 				return;
 			}
 		};
@@ -210,7 +213,8 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 				let sockets = sockets.lock().unwrap();
 				for address in sockets.iter() {
 					if let Err(e) = socket.send_to(heartbeat, address.1) {
-						abort(format!("Couldn't send heartbeat to socket {:#?}: {e}", socket), sequences.clone());
+						fail!("Couldn't send heartbeat to socket {socket:#?}: {e}");
+						abort(&shared);
 					}
 				}
 
@@ -220,24 +224,15 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 	}
 }
 
-fn abort(reason: String, sequences: Arc<Mutex<BiHashMap<String, ThreadId>>>) {
-	{
-		let sequences = sequences.lock().unwrap();
+fn abort(shared: &SharedState) {
+	let sequences = shared.sequences.lock().unwrap();
 
-		if sequences.is_empty() {
-			fail!("No sequence to abort!");
-			return;
-		}
+	if sequences.is_empty() {
+		fail!("No sequence to abort!");
+		return;
 	}
-	
-	fail!("{}", reason);
-	warn!("I would abort, but aborts are off..."); // TODO ask jeff abt this
 
-	/*
-	common::sequence::run(Sequence {
-		name: "abort".to_owned(),
-		script: "abort()".to_owned(),
-	});*/
+	handler::abort(shared);
 }
 
 fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex<Vec<NodeMapping>>>, board_id: BoardId, data_points: Vec<DataPoint>) {

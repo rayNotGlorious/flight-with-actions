@@ -93,26 +93,22 @@ fn init() -> ProgramState {
 	let home_socket = UdpSocket::bind(BIND_ADDRESS)
 		.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
 
-	let vehicle_state = Arc::new(Mutex::new(VehicleState::new()));
-	let mappings: Arc<Mutex<Vec<NodeMapping>>> = Arc::new(Mutex::new(Vec::new()));
-	let sequences: Arc<Mutex<BiHashMap<String, ThreadId>>> = Arc::new(Mutex::new(BiHashMap::new()));
+	let shared = SharedState {
+		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),
+		mappings: Arc::new(Mutex::new(Vec::new())),
+		server_address: Arc::new(Mutex::new(None)),
+		triggers: Arc::new(Mutex::new(Vec::new())),
+		sequences: Arc::new(Mutex::new(BiHashMap::new())),
+		abort_sequence: Arc::new(Mutex::new(None)),
+	};
 
 	let command_tx = 
-		match switchboard::run(home_socket, mappings.clone(), vehicle_state.clone(), sequences.clone()) {
+		match switchboard::run(home_socket, shared.clone()) {
 			Ok(command_tx) => command_tx,
 			Err(error) => {
 				fail!("Failed to create switchboard: {error}");
 				return ProgramState::Init;
 			}
-	};
-	
-	let shared = SharedState {
-		vehicle_state,
-		mappings,
-		server_address: Arc::new(Mutex::new(None)),
-		triggers: Arc::new(Mutex::new(Vec::new())),
-		sequences
-		abort_sequence: Arc::new(Mutex::new(None)),
 	};
 
 	sequence::initialize(shared.mappings.clone());
