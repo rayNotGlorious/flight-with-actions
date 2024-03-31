@@ -118,8 +118,6 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 	move || {
 		let mut buf = [0; 1_000_000];
 		
-		let mut established_sockets = HashSet::new();
-
 		loop {
 			let (size, incoming_address) = match home_socket.recv_from(&mut buf) {
 				Ok(tuple) => tuple,
@@ -140,12 +138,6 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 			board_tx.send(match raw_data {
 				DataMessage::Identity(board_id) => {
 					task!("Recieved identity message from board {board_id}");
-
-					if established_sockets.contains(&incoming_address) {
-						warn!("{board_id} sent an Identity after it already was sent one.");
-					} else {
-						established_sockets.insert(incoming_address);
-					}
 					
 					let value = DataMessage::Identity(String::from("flight-01"));
 
