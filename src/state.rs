@@ -3,7 +3,7 @@ use jeflog::{task, pass, warn, fail};
 use postcard::experimental::max_size::MaxSize;
 use std::{fmt, io::{self, Read, Write}, net::{IpAddr, TcpStream, UdpSocket}, sync::{Arc, Mutex}, thread::{self, ThreadId}, time::Duration};
 use bimap::BiHashMap;
-use crate::{forwarder, handler::{self, create_device_handler}, switchboard, SERVO_PORT};
+use crate::{forwarder, handler::{self, create_device_handler}, switchboard, SWITCHBOARD_ADDRESS, SERVO_PORT};
 use pyo3::Python;
 
 /// Holds all shared state that should be accessible concurrently in multiple contexts.
@@ -68,7 +68,6 @@ impl ProgramState {
 	}
 }
 
-const BIND_ADDRESS: (&str, u16) = ("0.0.0.0", 4573);
 impl fmt::Display for ProgramState {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
@@ -90,8 +89,8 @@ impl fmt::Display for ProgramState {
 }
 
 fn init() -> ProgramState {
-	let home_socket = UdpSocket::bind(BIND_ADDRESS)
-		.expect(&format!("Cannot create bind on port {:#?}", BIND_ADDRESS));
+	let home_socket = UdpSocket::bind(SWITCHBOARD_ADDRESS)
+		.expect(&format!("Cannot create bind on address {:#?}", SWITCHBOARD_ADDRESS));
 
 	let shared = SharedState {
 		vehicle_state: Arc::new(Mutex::new(VehicleState::new())),

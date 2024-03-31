@@ -1,11 +1,8 @@
-use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::{Duration, Instant}};
+use std::{collections::HashMap, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Instant};
 use common::comm::{BoardId, ChannelType, CompositeValveState, DataMessage, DataPoint, Measurement, NodeMapping, SamControlMessage, SensorType, Unit, ValveState, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
 use crate::{handler, state::SharedState, CommandSender};
-
-/// Milliseconds of inactivity before we sent a heartbeat
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(50);
 
 enum BoardCommunications {
 	Init(BoardId, SocketAddr),
@@ -71,7 +68,7 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 			// send sam control message to SAM
 			match control_rx.try_recv() {
 				Ok((board_id, control_message)) => 'b: {
-					let mut buf = [0; 1024];
+					let mut buf = [0; crate::COMMAND_MESSAGE_BUFFER_SIZE];
 
 					let control_message = match postcard::to_slice(&control_message, &mut buf) {
 						Ok(package) =>  package,
@@ -83,7 +80,7 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 					
 					let sockets = sockets.lock().unwrap();
 					if let Some(socket) = sockets.get(&board_id) {
-						let socket = (socket.ip(), 8378);
+						let socket = (socket.ip(), crate::SAM_PORT);
 
 						match home_socket.send_to(control_message, socket) {
 							Ok(size) => pass!("Sent {size} bits of control message successfully!"),
@@ -102,7 +99,7 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 			// update timers for all boards
 			for (board_id, timer) in timers.iter_mut() {
 				if let Some(raw_time) = timer {
-					if Instant::now() - *raw_time > HEARTBEAT_INTERVAL {
+					if Instant::now() - *raw_time > crate::TIME_TILL_DEATH {
 						fail!("{}", format!("{board_id} is unresponsive. Aborting..."));
 						handler::abort(&shared);
 						*timer = None;
@@ -116,7 +113,7 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 /// Constantly checks main binding for board data, handles board initalization and data encoding.
 fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>) -> impl FnOnce() -> () {
 	move || {
-		let mut buf = [0; 1_000_000];
+		let mut buf = [0; crate::DATA_MESSAGE_BUFFER_SIZE];
 		
 		loop {
 			let (size, incoming_address) = match home_socket.recv_from(&mut buf) {
@@ -139,7 +136,7 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 				DataMessage::Identity(board_id) => {
 					task!("Recieved identity message from board {board_id}");
 					
-					let value = DataMessage::Identity(String::from("flight-01"));
+					let value = DataMessage::Identity(String::from(crate::FC_BOARD_ID));
 
 					let package = match postcard::to_slice(&value, &mut buf) {
 						Ok(package) => package,
@@ -174,7 +171,7 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 
 	move || {
 		let mut clock: Instant = Instant::now();
-		let mut buf: Vec<u8> = vec![0; 1024];
+		let mut buf: Vec<u8> = vec![0; crate::HEARTBEAT_BUFFER_SIZE];
 
 		let heartbeat = match postcard::to_slice(&DataMessage::FlightHeartbeat, &mut buf) {
 			Ok(package) => package,
@@ -186,7 +183,7 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 		};
 
 		loop {
-			if Instant::now() - clock > HEARTBEAT_INTERVAL {
+			if Instant::now() - clock > crate::HEARTBEAT_RATE {
 				let sockets = sockets.lock().unwrap();
 				for address in sockets.iter() {
 					if let Err(e) = socket.send_to(heartbeat, address.1) {
