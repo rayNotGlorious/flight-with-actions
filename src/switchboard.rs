@@ -139,6 +139,8 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 
 			board_tx.send(match raw_data {
 				DataMessage::Identity(board_id) => {
+					task!("Recieved identity message from board {board_id}");
+
 					if established_sockets.contains(&incoming_address) {
 						warn!("{board_id} sent an Identity after it already was sent one.");
 					} else {
@@ -158,7 +160,7 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 					if let Err(e) = home_socket.send_to(package, incoming_address) {
 						fail!("Couldn't send DataMessage::Identity to ip {incoming_address}: {e}");
 					} else {
-						pass!("Sent DataMessage::Identity successfully.");
+						pass!("Sent DataMessage::Identity to {incoming_address} successfully.");
 					}
 
 					Some(BoardCommunications::Init(board_id, incoming_address))
