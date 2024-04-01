@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Instant};
+use std::{collections::{HashMap, HashSet}, io, net::{SocketAddr, UdpSocket}, sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex}, thread, time::Instant};
 use common::comm::{BoardId, ChannelType, CompositeValveState, DataMessage, DataPoint, Measurement, NodeMapping, SamControlMessage, SensorType, Unit, ValveState, VehicleState};
 use jeflog::{task, fail, warn, pass};
 
@@ -9,6 +9,12 @@ enum BoardCommunications {
 	Sam(BoardId, Vec<DataPoint>),
 	Bsm(BoardId)
 }
+
+// TODO i really need to work out what the hell to do with timers/statuses. timers can do the job of statuses, so why the am i keeping it? only issue is i need to modify timers while iterating through it.
+// TODO Seperate Heartbeat and timer, don't send heartbeats to "disconnected" boards
+// TODO Unobfuscate error messages
+// TODO figure out what to do at the calling of each abort
+// TODO Make `sockets` into a RwLock by implementing a super-loop setup: Write portion (finding all possible SAM boards), and a read portion (addressbook). (Ask jeff as RwLock implementation might avoid the need of a super-loop)
 
 /// One-shot thread spawner, begins switchboard logic.
 pub fn run(home_socket: UdpSocket, shared: SharedState) -> Result<CommandSender, io::Error> {
@@ -22,15 +28,21 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 	let mappings = shared.mappings.clone();
 	let vehicle_state = shared.vehicle_state.clone();
 
+	// Boards to their to their correlated socket addresses.
 	let sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>> = Arc::new(Mutex::new(HashMap::new()));
-	let mut timers: HashMap<BoardId, Option<Instant>> = HashMap::new();
-	let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
+
+	// Boards to their heartbeat clocks (when the time hits zero, the board is considered disconnected)
+	let mut timers: HashMap<BoardId, Instant> = HashMap::new();
+
+	// Boards to their connection status
+	let statuses: Arc<Mutex<HashSet<BoardId>>> = Arc::new(Mutex::new(HashSet::new()));
 	
+	let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
 	let listen_socket = home_socket.try_clone()?;
 	let pulse_socket = home_socket.try_clone()?;
 
 	thread::spawn(listen(listen_socket, board_tx));
-	thread::spawn(pulse(pulse_socket, sockets.clone(), &shared));
+	thread::spawn(pulse(&shared, pulse_socket, sockets.clone(), statuses.clone()));
 
 	Ok(move || {
 		loop {
@@ -40,23 +52,20 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 					let mut sockets = sockets.lock().unwrap();
 					sockets.insert(board_id.to_string(), address);
 
-					timers.insert(board_id, Some(Instant::now()));
+					let mut connected = statuses.lock().unwrap();
+					connected.insert(board_id.to_string());
+					
+					timers.insert(board_id, Instant::now());
 				},
 				Ok(Some(BoardCommunications::Sam(board_id, datapoints)))  => {
 					process_sam_data(vehicle_state.clone(), mappings.clone(), board_id.clone(), datapoints);
 					
-					if let Some(timer) = timers.get_mut(&board_id) {
-						*timer = Some(Instant::now());
-					} else {
-						warn!("Cannot find timer for board with id of {board_id}!");
-					}
+					reset_timer(&shared, board_id, &mut timers, statuses.clone());
 				},
 				Ok(Some(BoardCommunications::Bsm(board_id))) => {
-					if let Some(timer) = timers.get_mut(&board_id) {
-						*timer = Some(Instant::now());
-					} else {
-						warn!("Cannot find timer for board with id of {board_id}!");
-					}
+					warn!("Recieved BSM data from board {board_id}"); 
+
+					reset_timer(&shared, board_id, &mut timers, statuses.clone());
 				},
 				Ok(None) => { warn!("Unknown data recieved from board!"); },
 				Err(TryRecvError::Disconnected) => {
@@ -95,15 +104,17 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 			};
 			
 
-			// make this cleaner
-			// update timers for all boards
+			let mut statuses = statuses.lock().unwrap();
 			for (board_id, timer) in timers.iter_mut() {
-				if let Some(raw_time) = timer {
-					if Instant::now() - *raw_time > crate::TIME_TILL_DEATH {
-						fail!("{}", format!("{board_id} is unresponsive. Aborting..."));
-						handler::abort(&shared);
-						*timer = None;
-					}
+				if !statuses.contains(board_id) {
+					continue;
+				}
+
+				if Instant::now() - *timer > crate::TIME_TILL_DEATH {
+					statuses.remove(board_id);
+
+					fail!("{}", format!("{board_id} is unresponsive. Aborting..."));
+					handler::abort(&shared);
 				}
 			}
 		}
@@ -165,9 +176,10 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 	}
 }
 
-fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, shared: &SharedState) -> impl FnOnce() -> () {
+fn pulse(shared: &SharedState, socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, statuses: Arc<Mutex<HashSet<BoardId>>>) -> impl FnOnce() -> () {
 	let shared = shared.clone();
 	let sockets = sockets.clone();
+	let statuses = statuses.clone();
 
 	move || {
 		let mut clock: Instant = Instant::now();
@@ -185,8 +197,13 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 		loop {
 			if Instant::now() - clock > crate::HEARTBEAT_RATE {
 				let sockets = sockets.lock().unwrap();
-				for address in sockets.iter() {
-					if let Err(e) = socket.send_to(heartbeat, address.1) {
+				let statuses = statuses.lock().unwrap();
+				for (board_id, address) in sockets.iter() {
+					if !statuses.contains(board_id) {
+						continue;
+					}
+
+					if let Err(e) = socket.send_to(heartbeat, address) {
 						fail!("Couldn't send heartbeat to socket {socket:#?}: {e}");
 						handler::abort(&shared);
 					}
@@ -196,6 +213,19 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 			}
 		}
 	}
+}
+
+/// Resets the timer and connection status of the specified board.
+fn reset_timer(shared: &SharedState, board_id: BoardId, timers: &mut HashMap<BoardId, Instant>, statuses: Arc<Mutex<HashSet<BoardId>>>) {
+	if let Some(timer) = timers.get_mut(&board_id) {
+		*timer = Instant::now();
+	} else {
+		fail!("Cannot find timer for board with id of {board_id}.");
+		handler::abort(&shared);
+	}
+
+	let mut statuses = statuses.lock().unwrap();
+	statuses.insert(board_id);
 }
 
 fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex<Vec<NodeMapping>>>, board_id: BoardId, data_points: Vec<DataPoint>) {

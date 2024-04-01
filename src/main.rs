@@ -33,6 +33,7 @@ const FC_BOARD_ID: &str = "flight-01";
 
 type CommandSender = Sender<(BoardId, SamControlMessage)>;
 
+
 fn main() {
 	let mut state = ProgramState::Init;
 
