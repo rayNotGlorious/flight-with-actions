@@ -1,5 +1,5 @@
 use common::{comm::{BoardId, CompositeValveState, NodeMapping, SamControlMessage, ValveState, VehicleState}, sequence::{self, AbortError, DeviceAction}};
-use jeflog::{fail, pass, task, warn};
+use jeflog::{fail, warn};
 use pyo3::{types::PyNone, IntoPy, PyErr, PyObject, Python, ToPyObject};
 use std::{sync::{mpsc::Sender, Mutex}, thread};
 
@@ -90,10 +90,8 @@ fn actuate_valve(name: &str, state: ValveState, mappings: &Mutex<Vec<NodeMapping
 
 	let message = SamControlMessage::ActuateValve { channel: mapping.channel, powered };
 
-	task!("Sending SamControlMessage::ActuateValve to {}", mapping.board_id);
-	match command_tx.send((mapping.board_id.clone(), message)) {
-		Ok(()) => pass!("Command sent!"),
-		Err(e) => fail!("Command couldn't be sent: {e}")
+	if let Err(error) = command_tx.send((mapping.board_id.clone(), message)) {
+		fail!("Failed to send command: {error}");
 	}
 
 	drop(mappings);

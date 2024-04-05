@@ -29,17 +29,13 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 	let mut timers: HashMap<BoardId, Option<Instant>> = HashMap::new();
 	let (board_tx, board_rx) = mpsc::channel::<Option<BoardCommunications>>();
 	
-	task!("Cloning sockets...");
 	let listen_socket = home_socket.try_clone()?;
 	let pulse_socket = home_socket.try_clone()?;
-	pass!("Sockets cloned!");
 
 	thread::spawn(listen(listen_socket, board_tx));
 	thread::spawn(pulse(pulse_socket, sockets.clone(), &shared));
 
 	Ok(move || {
-		task!("Switchboard started.");
-    
 		loop {
 			// interpret data from SAM board
 			match board_rx.try_recv() {
@@ -59,8 +55,6 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 					}
 				},
 				Ok(Some(BoardCommunications::Bsm(board_id))) => {
-					warn!("Recieved BSM data from board {board_id}"); 
-
 					if let Some(timer) = timers.get_mut(&board_id) {
 						*timer = Some(Instant::now());
 					} else {
@@ -68,7 +62,9 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 					}
 				},
 				Ok(None) => { warn!("Unknown data recieved from board!"); },
-				Err(TryRecvError::Disconnected) => { warn!("Lost connection to board_tx channel. This isn't supposed to happen."); },
+				Err(TryRecvError::Disconnected) => {
+					warn!("Lost connection to board_tx channel. This isn't supposed to happen.");
+				},
 				Err(TryRecvError::Empty) => {}
 			};
 
@@ -124,7 +120,6 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 		
 		let mut established_sockets = HashSet::new();
 
-		task!("Flight Computer listening for SAM data...");
 		loop {
 			let (size, incoming_address) = match home_socket.recv_from(&mut buf) {
 				Ok(tuple) => tuple,
@@ -134,7 +129,6 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 				}
 			};
 
-			task!("Interpreting buffer...");
 			let raw_data = match postcard::from_bytes::<DataMessage>(&mut buf[..size]) {
 				Ok(data) => data,
 				Err(e) => {
@@ -142,9 +136,7 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 					continue;
 				}
 			};
-			pass!("Interpreted buffer.");
 
-			task!("Decoding buffer...");
 			board_tx.send(match raw_data {
 				DataMessage::Identity(board_id) => {
 					if established_sockets.contains(&incoming_address) {
@@ -171,19 +163,10 @@ fn listen(home_socket: UdpSocket, board_tx: Sender<Option<BoardCommunications>>)
 
 					Some(BoardCommunications::Init(board_id, incoming_address))
 				},
-				DataMessage::Sam(board_id, datapoints) => {
-					pass!("Received DataMessage::Sam from {board_id}");
-
-					Some(BoardCommunications::Sam(board_id, datapoints.to_vec()))
-				},
-				DataMessage::Bms(board_id) => {
-					pass!("Received DataMessage::Bms from {board_id}");
-
-					Some(BoardCommunications::Bsm(board_id))
-				},
+				DataMessage::Sam(board_id, datapoints) => Some(BoardCommunications::Sam(board_id, datapoints.to_vec())),
+				DataMessage::Bms(board_id) => Some(BoardCommunications::Bsm(board_id)),
 				_ => {
 					warn!("Unknown data found.");
-
 					None
 				}
 			}).expect("board_rx closed unexpectedly. This shouldn't happen.");	
