@@ -108,7 +108,7 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 				if let Some(raw_time) = timer {
 					if Instant::now() - *raw_time > HEARTBEAT_INTERVAL {
 						fail!("{}", format!("{board_id} is unresponsive. Aborting..."));
-						abort(&shared);
+						handler::abort(&shared);
 						*timer = None;
 					}
 				}
@@ -203,7 +203,7 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 			Ok(package) => package,
 			Err(e) => {
 				fail!("postcard returned this error when attempting to serialize DataMessage::FlightHeartbeat: {e}");
-				abort(&shared);
+				handler::abort(&shared);
 				return;
 			}
 		};
@@ -214,7 +214,7 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 				for address in sockets.iter() {
 					if let Err(e) = socket.send_to(heartbeat, address.1) {
 						fail!("Couldn't send heartbeat to socket {socket:#?}: {e}");
-						abort(&shared);
+						handler::abort(&shared);
 					}
 				}
 
@@ -222,17 +222,6 @@ fn pulse(socket: UdpSocket, sockets: Arc<Mutex<HashMap<BoardId, SocketAddr>>>, s
 			}
 		}
 	}
-}
-
-fn abort(shared: &SharedState) {
-	let sequences = shared.sequences.lock().unwrap();
-
-	if sequences.is_empty() {
-		fail!("No sequence to abort!");
-		return;
-	}
-
-	handler::abort(shared);
 }
 
 fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex<Vec<NodeMapping>>>, board_id: BoardId, data_points: Vec<DataPoint>) {
