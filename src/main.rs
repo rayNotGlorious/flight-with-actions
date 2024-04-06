@@ -18,7 +18,7 @@ const SAM_PORT: u16 = 8378;
 /// How often heartbeats are sent
 const HEARTBEAT_RATE: Duration = Duration::from_millis(50);
 /// Milliseconds of inactivity before a board is declared dead
-const TIME_TILL_DEATH: Duration = Duration::from_millis(50);
+const TIME_TILL_DEATH: Duration = Duration::from_millis(100);
 
 /// How large the buffer to send a command to a board should be (Can probably replace this with a sizeof(SamControlMessage)).
 const COMMAND_MESSAGE_BUFFER_SIZE: usize = 1_024;

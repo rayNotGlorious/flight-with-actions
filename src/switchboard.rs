@@ -58,14 +58,13 @@ fn start_switchboard(home_socket: UdpSocket, shared: SharedState, control_rx: Re
 					timers.insert(board_id, Instant::now());
 				},
 				Ok(Some(BoardCommunications::Sam(board_id, datapoints)))  => {
+					reset_timer(&shared, &board_id, &mut timers, statuses.clone());
 					process_sam_data(vehicle_state.clone(), mappings.clone(), board_id.clone(), datapoints);
-					
-					reset_timer(&shared, board_id, &mut timers, statuses.clone());
 				},
 				Ok(Some(BoardCommunications::Bsm(board_id))) => {
 					warn!("Recieved BSM data from board {board_id}"); 
 
-					reset_timer(&shared, board_id, &mut timers, statuses.clone());
+					reset_timer(&shared, &board_id, &mut timers, statuses.clone());
 				},
 				Ok(None) => { warn!("Unknown data recieved from board!"); },
 				Err(TryRecvError::Disconnected) => {
@@ -216,8 +215,8 @@ fn pulse(shared: &SharedState, socket: UdpSocket, sockets: Arc<Mutex<HashMap<Boa
 }
 
 /// Resets the timer and connection status of the specified board.
-fn reset_timer(shared: &SharedState, board_id: BoardId, timers: &mut HashMap<BoardId, Instant>, statuses: Arc<Mutex<HashSet<BoardId>>>) {
-	if let Some(timer) = timers.get_mut(&board_id) {
+fn reset_timer(shared: &SharedState, board_id: &BoardId, timers: &mut HashMap<BoardId, Instant>, statuses: Arc<Mutex<HashSet<BoardId>>>) {
+	if let Some(timer) = timers.get_mut(board_id) {
 		*timer = Instant::now();
 	} else {
 		fail!("Cannot find timer for board with id of {board_id}.");
@@ -225,7 +224,10 @@ fn reset_timer(shared: &SharedState, board_id: BoardId, timers: &mut HashMap<Boa
 	}
 
 	let mut statuses = statuses.lock().unwrap();
-	statuses.insert(board_id);
+
+	if !statuses.contains(board_id) {
+		statuses.insert(board_id.clone());
+	}
 }
 
 fn process_sam_data(vehicle_state: Arc<Mutex<VehicleState>>, mappings: Arc<Mutex<Vec<NodeMapping>>>, board_id: BoardId, data_points: Vec<DataPoint>) {
