@@ -102,7 +102,7 @@ fn init() -> ProgramState {
 	};
 
 	let command_tx = 
-		match switchboard::run(home_socket, shared.clone()) {
+		match switchboard::start(shared.clone(), home_socket) {
 			Ok(command_tx) => command_tx,
 			Err(error) => {
 				fail!("Failed to create switchboard: {error}");
