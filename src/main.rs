@@ -27,6 +27,9 @@ const DATA_MESSAGE_BUFFER_SIZE: usize = 1_000_000;
 /// How large the buffer to send a heartbeat to a board should be (Can probably replace this with a sizeof(SamControlMessage::Heartbeat)).
 const HEARTBEAT_BUFFER_SIZE: usize = 1_024;
 
+/// How many boards should be refreshed before checking for timeout
+const REFRESH_COUNT: u8 = 5;
+
 
 /// Board ID of the flight computer
 const FC_BOARD_ID: &str = "flight-01";
