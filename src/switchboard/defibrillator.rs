@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, net::{SocketAddr, UdpSocket}, sync::{Arc, Mutex, RwLock}, thread};
 use common::comm::{BoardId, DataMessage};
 use jeflog::fail;
-use crate::{handler, state::SharedState, HEARTBEAT_RATE};
+use crate::{handler, state::SharedState, HEARTBEAT_PERIOD};
 
 /// Wakes every HEARTBEAT_RATE to send heartbeats to all the connected Sam boards to ensure that the FC isn't disconnected.
 pub fn defibrillator(shared: SharedState, sender: UdpSocket, sockets: Arc<RwLock<HashMap<BoardId, SocketAddr>>>, statuses: Arc<Mutex<HashSet<BoardId>>>) -> impl FnOnce() -> () {
@@ -18,7 +18,7 @@ pub fn defibrillator(shared: SharedState, sender: UdpSocket, sockets: Arc<RwLock
     };
     
     loop {
-      thread::sleep(HEARTBEAT_RATE);
+      thread::sleep(HEARTBEAT_PERIOD);
 
       let sockets = sockets.read().unwrap();
       let statuses = statuses.lock().unwrap();

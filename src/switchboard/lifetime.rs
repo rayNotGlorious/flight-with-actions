@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, sync::{mpsc::{Receiver, TryRecvError}, Arc, Mutex}, time::Instant};
 use common::comm::BoardId;
 use jeflog::fail;
-use crate::{handler, state::SharedState, REFRESH_COUNT, TIME_TILL_DEATH};
+use crate::{handler, state::SharedState, REFRESH_COUNT, TIME_TIL_DEATH};
 
 /// Tracks the state of each board, detected if boards lose communications.
 pub fn lifetime(shared: SharedState, snooze: Receiver<BoardId>, statuses: Arc<Mutex<HashSet<BoardId>>>) -> impl FnOnce() -> () {  
@@ -37,7 +37,7 @@ pub fn lifetime(shared: SharedState, snooze: Receiver<BoardId>, statuses: Arc<Mu
           continue;
         }
 
-        if Instant::now() - *timers.get(board_id).unwrap() > TIME_TILL_DEATH {
+        if Instant::now() - *timers.get(board_id).unwrap() > TIME_TIL_DEATH {
           statuses.remove(board_id);
           abort = true;
           fail!("Detected loss of comms from {board_id}");

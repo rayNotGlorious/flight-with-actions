@@ -23,8 +23,7 @@ pub fn switchboard(shared: SharedState, snooze: Sender<BoardId>, gig: Sender<(Bo
       let incoming_data = match postcard::from_bytes::<DataMessage>(&buffer[..message_length]) {
         Ok(data) => data,
         Err(e) => {
-          fail!("postcard couldn't interpret the buffer data, aborting...: {e}");
-          handler::abort(&shared);
+          fail!("postcard couldn't interpret the buffer data, ignoring...: {e}");
           continue;
         }
       };
