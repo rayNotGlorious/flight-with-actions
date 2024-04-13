@@ -23,9 +23,7 @@ pub fn lifetime(shared: SharedState, snooze: Receiver<BoardId>, statuses: Arc<Mu
           }
         };
 
-        // if the board doesn't exist or if it's inactive, set it to be true (since we just got data from it)
-        // this may deadlock, as the statuses in the if statement may never get dropped? idk
-        if !statuses.contains(&board_id){
+        if !statuses.contains(&board_id) {
           statuses.insert(board_id.clone());
         }
 
