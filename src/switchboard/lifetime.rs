@@ -1,10 +1,10 @@
 use std::{collections::{HashMap, HashSet}, sync::{mpsc::{Receiver, TryRecvError}, Arc, Mutex}, time::Instant};
 use common::comm::BoardId;
 use jeflog::fail;
-use crate::{handler, state::SharedState, REFRESH_COUNT, TIME_TIL_DEATH};
+use crate::{handler, state::SharedState, TuiMessage, TuiSender, REFRESH_COUNT, TIME_TIL_DEATH};
 
 /// Tracks the state of each board, detected if boards lose communications.
-pub fn lifetime(shared: SharedState, snooze: Receiver<BoardId>, statuses: Arc<Mutex<HashSet<BoardId>>>) -> impl FnOnce() -> () {  
+pub fn lifetime(shared: SharedState, snooze: Receiver<BoardId>, statuses: Arc<Mutex<HashSet<BoardId>>>, tui_tx: TuiSender) -> impl FnOnce() -> () {  
   move || {
     let mut timers = HashMap::new();
 
@@ -40,6 +40,11 @@ pub fn lifetime(shared: SharedState, snooze: Receiver<BoardId>, statuses: Arc<Mu
         if Instant::now() - *timers.get(board_id).unwrap() > TIME_TIL_DEATH {
           statuses.remove(board_id);
           abort = true;
+
+          //if let Err(e) = tui_tx.send(TuiMessage::Status(board_id.clone(), false)) {
+          //  fail!("Couldn't send message to TUI. tui_rx might've been dropped: {e}");
+          //};
+
           fail!("Detected loss of comms from {board_id}");
         }
       }

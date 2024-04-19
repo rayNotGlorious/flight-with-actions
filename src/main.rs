@@ -3,7 +3,7 @@ mod handler;
 mod state;
 mod switchboard;
 
-use std::{sync::mpsc::Sender, time::Duration};
+use std::{sync::mpsc::{Receiver, Sender}, time::Duration};
 
 use common::comm::{BoardId, SamControlMessage};
 use jeflog::pass;
@@ -35,6 +35,20 @@ const REFRESH_COUNT: u8 = 5;
 const FC_BOARD_ID: &str = "flight-01";
 
 type CommandSender = Sender<(BoardId, SamControlMessage)>;
+
+type TuiReceiver = Receiver<TuiMessage>;
+type TuiSender = Sender<TuiMessage>;
+
+enum TuiMessage {
+	/// When a new board is found
+	Identity(BoardId),
+
+	/// Loss of Communications TuiMessage, if the boolean is true then the board is not disconnected, and vice versa.
+	Status(BoardId, bool),
+
+	/// Data TuiMessage (this board recieved data)
+	Data(BoardId)
+}
 
 
 fn main() {

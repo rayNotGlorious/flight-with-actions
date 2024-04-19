@@ -101,9 +101,9 @@ fn init() -> ProgramState {
 		abort_sequence: Arc::new(Mutex::new(None)),
 	};
 
-	let command_tx = 
+	let (command_tx, tui_rx) = 
 		match switchboard::start(shared.clone(), home_socket) {
-			Ok(command_tx) => command_tx,
+			Ok(tuple) => tuple,
 			Err(error) => {
 				fail!("Failed to create switchboard: {error}");
 				return ProgramState::Init;
