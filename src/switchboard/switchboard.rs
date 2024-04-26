@@ -1,10 +1,10 @@
 use std::{collections::HashMap, net::{SocketAddr, UdpSocket}, sync::{mpsc::Sender, Arc, RwLock}};
 use common::comm::{BoardId, DataMessage, DataPoint};
 use jeflog::{fail, pass, warn};
-use crate::{handler, state::SharedState, TuiSender, FC_BOARD_ID};
+use crate::{handler, state::SharedState, FC_BOARD_ID};
 
 /// Wakes when there's something to be passed along. Think of it like a telephone operator.
-pub fn switchboard(shared: SharedState, snooze: Sender<BoardId>, gig: Sender<(BoardId, Vec<DataPoint>)>, handshake_sender: UdpSocket, reciever: UdpSocket, sockets: Arc<RwLock<HashMap<BoardId, SocketAddr>>>, tui_tx: TuiSender) -> impl FnOnce() -> () {
+pub fn switchboard(shared: SharedState, snooze: Sender<BoardId>, gig: Sender<(BoardId, Vec<DataPoint>)>, handshake_sender: UdpSocket, reciever: UdpSocket, sockets: Arc<RwLock<HashMap<BoardId, SocketAddr>>>) -> impl FnOnce() -> () {
   move || {
     let mut buffer = [0; crate::DATA_MESSAGE_BUFFER_SIZE];
 
