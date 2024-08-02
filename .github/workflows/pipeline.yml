@@ -9,5 +9,7 @@ jobs:
     format:
         runs-on: ubuntu-latest
         steps:
-            - name: Print a greeting.
-              run: echo Hello world!
+            - name: Check formatting
+              run: cargo fmt --check
+            - name: Print Congrats
+              run: echo Congrats!
