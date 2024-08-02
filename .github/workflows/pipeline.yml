@@ -9,6 +9,8 @@ jobs:
     format:
         runs-on: ubuntu-latest
         steps:
+            - name: debug
+              run: ls
             - name: Check formatting
               run: cargo fmt --check
             - name: Print Congrats
