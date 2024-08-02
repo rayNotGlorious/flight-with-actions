@@ -1,0 +1,13 @@
+name: Pipeline
+run-name: Push to ${{github.action_path}} by @${{github.actor}}
+
+on: 
+    pull_request:
+        branches: [ main ]
+
+jobs:
+    format:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Print a greeting.
+              run: echo Hello world!

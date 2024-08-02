@@ -1,0 +1,13 @@
+# Extensions
+*.lock
+*.md
+.*ignore
+
+# Files
+deploy.sh
+Dockerfile
+.git
+
+# Directories
+target
+.github
