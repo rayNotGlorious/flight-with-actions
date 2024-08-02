@@ -2,7 +2,7 @@ name: Pipeline
 run-name: Push to ${{github.action_path}} by @${{github.actor}}
 
 on: 
-    pull_request:
+    push:
         branches: [ main ]
 
 jobs:
